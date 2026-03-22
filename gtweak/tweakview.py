@@ -20,6 +20,7 @@ from gtweak.tweaks.tweak_group_sound import TWEAK_GROUP as SoundTweaks, show_sou
 from gtweak.tweaks.tweak_group_windows import TWEAK_GROUP as WindowTweaks
 from gtweak.tweaks.tweak_group_multitasking import TWEAK_GROUP as MultitaskingTweaks
 from gtweak.tweaks.tweak_group_startup import TWEAK_GROUP as StartupApplicationTweaks
+from gtweak.tweaks.tweak_group_extensions import TWEAK_GROUP as ExtensionsTweaks
 
 tweaks = [ 
     MouseTweaks,
@@ -29,6 +30,7 @@ tweaks = [
     WindowTweaks,
     MultitaskingTweaks,
     StartupApplicationTweaks,
+    ExtensionsTweaks,
     SoundTweaks
 ]
 

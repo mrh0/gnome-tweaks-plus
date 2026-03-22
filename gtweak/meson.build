@@ -39,7 +39,8 @@ tweak_sources = [
   'tweaks/tweak_group_keyboard.py',
   'tweaks/tweak_group_startup.py',
   'tweaks/tweak_group_windows.py',
-  'tweaks/tweak_group_multitasking.py'
+  'tweaks/tweak_group_multitasking.py',
+  'tweaks/tweak_group_extensions.py'
 ]
 
 audio_sources = [
