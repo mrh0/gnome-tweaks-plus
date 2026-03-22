@@ -444,14 +444,19 @@ class GSettingsTweakFontRow(Adw.ActionRow, _GSettingsTweak, _DependableMixin):
 
 
 # TODO: Port to AdwSpinRow
-class GSettingsTweakSpinRow(Adw.Bin, _GSettingsTweak, _DependableMixin):
+class GSettingsTweakSpinRow(Adw.PreferencesRow, _GSettingsTweak, _DependableMixin):
     def __init__(self, title, schema_name, key_name, **options):
-        Adw.Bin.__init__(self, margin_start=UI_BOX_HORIZONTAL_SPACING, margin_end=UI_BOX_HORIZONTAL_SPACING, margin_top=UI_BOX_SPACING, margin_bottom=UI_BOX_SPACING)
+        Adw.PreferencesRow.__init__(self)
         _GSettingsTweak.__init__(self, title, schema_name, key_name, **options)
 
+        # Create a horizontal box with title and spinner
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        
         self.row = Adw.SpinRow(title=title)
+        self.row.set_hexpand(True)
 
-        self.set_child(self.row)
+        box.append(self.row)
+        self.set_child(box)
 
         # returned variant is range:(min, max)
         _min, _max = self.settings.get_range(key_name)[1]
@@ -461,7 +466,7 @@ class GSettingsTweakSpinRow(Adw.Bin, _GSettingsTweak, _DependableMixin):
         self.row.set_digits(options.get('digits', 0))
         self.settings.bind(key_name, adjustment, "value", Gio.SettingsBindFlags.DEFAULT)
 
-        self.widget_for_size_group = self.row
+        self.widget_for_size_group = None
 
         self.add_dependency_on_tweak(
                 options.get("depends_on"),

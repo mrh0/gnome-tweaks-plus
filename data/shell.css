@@ -72,6 +72,17 @@
   border-radius: 4px;
 }
 
+/* Remove padding from SpinRow and Bin widgets */
+spinrow {
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+bin {
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
 
 
 

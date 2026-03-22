@@ -296,21 +296,17 @@ class VolumeControl(Adw.ActionRow, Tweak):
         current_vol = 1.0
         try:
             if device_type == "sink":
-                default_device = self.pa_manager.get_default_sink()
-                logger.debug(f"  default_sink: {default_device}")
-                if default_device:
-                    vol = self.pa_manager.get_sink_volume(default_device)
-                    if vol is not None:
-                        current_vol = vol
-                        logger.debug(f"  current output volume: {current_vol}")
+                # Use @DEFAULT_AUDIO_SINK@ alias to always control the current default
+                vol = self.pa_manager.get_sink_volume("@DEFAULT_AUDIO_SINK@")
+                if vol is not None:
+                    current_vol = vol
+                    logger.debug(f"  current output volume: {current_vol}")
             else:
-                default_device = self.pa_manager.get_default_source()
-                logger.debug(f"  default_source: {default_device}")
-                if default_device:
-                    vol = self.pa_manager.get_source_volume(default_device)
-                    if vol is not None:
-                        current_vol = vol
-                        logger.debug(f"  current input volume: {current_vol}")
+                # Use @DEFAULT_AUDIO_SOURCE@ alias to always control the current default
+                vol = self.pa_manager.get_source_volume("@DEFAULT_AUDIO_SOURCE@")
+                if vol is not None:
+                    current_vol = vol
+                    logger.debug(f"  current input volume: {current_vol}")
         except Exception as e:
             logger.error(f"Error getting initial volume: {e}")
         
@@ -333,6 +329,21 @@ class VolumeControl(Adw.ActionRow, Tweak):
             # Update the slider's adjustment
             adjustment = self.volume_scale.get_adjustment()
             adjustment.set_upper(max_volume)
+            
+            # If limiting to 100% and current volume is above 100%, clamp it
+            if not allow_above_100 and self.device_type == "sink":
+                current_volume = self.volume_scale.get_value()
+                if current_volume > 1.0:
+                    logger.debug(f"Clamping volume from {current_volume} to 1.0")
+                    self._updating = True  # Prevent triggering volume change handler
+                    try:
+                        # Set the slider and the actual device volume to 1.0
+                        self.volume_scale.set_value(1.0)
+                        if self.pa_manager and self.pa_manager.is_available():
+                            self.pa_manager.set_sink_volume("@DEFAULT_AUDIO_SINK@", 1.0)
+                            logger.info("Clamped output volume to 100%")
+                    finally:
+                        self._updating = False
             
             # Remove old marks and add new one if needed
             self.volume_scale.clear_marks()
@@ -358,27 +369,19 @@ class VolumeControl(Adw.ActionRow, Tweak):
             logger.debug(f"Volume changed to: {volume} (device_type={self.device_type})")
             
             if self.device_type == "sink":
-                default_device = self.pa_manager.get_default_sink()
-                logger.debug(f"  current default output device: {default_device}")
-                if default_device:
-                    success = self.pa_manager.set_sink_volume(default_device, volume)
-                    if success:
-                        logger.info(f"Set output volume to: {volume}")
-                    else:
-                        logger.warning(f"Failed to set output volume")
+                # Use @DEFAULT_AUDIO_SINK@ alias to always control the current default
+                success = self.pa_manager.set_sink_volume("@DEFAULT_AUDIO_SINK@", volume)
+                if success:
+                    logger.info(f"Set output volume to: {volume}")
                 else:
-                    logger.debug("Skipping volume change: no default output device available yet")
+                    logger.warning(f"Failed to set output volume")
             else:
-                default_device = self.pa_manager.get_default_source()
-                logger.debug(f"  current default input device: {default_device}")
-                if default_device:
-                    success = self.pa_manager.set_source_volume(default_device, volume)
-                    if success:
-                        logger.info(f"Set input volume to: {volume}")
-                    else:
-                        logger.warning(f"Failed to set input volume")
+                # Use @DEFAULT_AUDIO_SOURCE@ alias to always control the current default
+                success = self.pa_manager.set_source_volume("@DEFAULT_AUDIO_SOURCE@", volume)
+                if success:
+                    logger.info(f"Set input volume to: {volume}")
                 else:
-                    logger.debug("Skipping volume change: no default input device available yet")
+                    logger.warning(f"Failed to set input volume")
         finally:
             self._updating = False
 

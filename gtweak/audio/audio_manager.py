@@ -13,6 +13,7 @@ import logging
 import subprocess
 import json
 import os
+import re
 from typing import List, Tuple, Optional
 
 logger = logging.getLogger(__name__)
@@ -241,26 +242,18 @@ class PipeWireManager:
             return None
         
         try:
-            devices = self._run_pw_dump()
-            if not devices:
-                logger.warning("get_default_sink: pw-dump returned no data")
-                return None
+            # Use wpctl inspect to query the actual default sink
+            output = self._run_wpctl('inspect', '@DEFAULT_AUDIO_SINK@')
+            if output:
+                # Parse the output to extract the device ID (first line contains "id XX,")
+                first_line = output.split('\n')[0]
+                match = re.match(r'id (\d+)', first_line)
+                if match:
+                    device_id = match.group(1)
+                    logger.debug(f"get_default_sink: {device_id}")
+                    return device_id
             
-            # Return the first Audio/Sink found
-            for item in devices:
-                try:
-                    info = item.get('info', {})
-                    props = info.get('props', {})
-                    
-                    if props.get('media.class') == 'Audio/Sink':
-                        device_id = str(item.get('id', ''))
-                        if device_id:
-                            logger.debug(f"get_default_sink: {device_id}")
-                            return device_id
-                except (KeyError, TypeError, ValueError):
-                    continue
-            
-            logger.warning("get_default_sink: no Audio/Sink found in pw-dump")
+            logger.warning("get_default_sink: could not parse default sink from wpctl inspect")
             return None
         except Exception as e:
             logger.error(f"get_default_sink: {type(e).__name__}: {e}")
@@ -403,26 +396,18 @@ class PipeWireManager:
             return None
         
         try:
-            devices = self._run_pw_dump()
-            if not devices:
-                logger.warning("get_default_source: pw-dump returned no data")
-                return None
+            # Use wpctl inspect to query the actual default source
+            output = self._run_wpctl('inspect', '@DEFAULT_AUDIO_SOURCE@')
+            if output:
+                # Parse the output to extract the device ID (first line contains "id XX,")
+                first_line = output.split('\n')[0]
+                match = re.match(r'id (\d+)', first_line)
+                if match:
+                    device_id = match.group(1)
+                    logger.debug(f"get_default_source: {device_id}")
+                    return device_id
             
-            # Return the first Audio/Source found
-            for item in devices:
-                try:
-                    info = item.get('info', {})
-                    props = info.get('props', {})
-                    
-                    if props.get('media.class') == 'Audio/Source':
-                        device_id = str(item.get('id', ''))
-                        if device_id:
-                            logger.debug(f"get_default_source: {device_id}")
-                            return device_id
-                except (KeyError, TypeError, ValueError):
-                    continue
-            
-            logger.warning("get_default_source: no Audio/Source found in pw-dump")
+            logger.warning("get_default_source: could not parse default source from wpctl inspect")
             return None
         except Exception as e:
             logger.error(f"get_default_source: {type(e).__name__}: {e}")
