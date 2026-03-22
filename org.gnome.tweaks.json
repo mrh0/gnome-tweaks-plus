@@ -1,7 +1,7 @@
 {
     "app-id" : "org.gnome.tweaks",
-    "runtime" : "org.gnome.Platform",
-    "runtime-version" : "master",
+    "runtime" : "org.gnome.Sdk",
+    "runtime-version" : "49",
     "sdk" : "org.gnome.Sdk",
     "command" : "start-gnome-tweaks",
     "tags" : [
@@ -11,13 +11,33 @@
     "finish-args" : [
         "--device=dri",
         "--env=GIO_EXTRA_MODULES=/app/lib/gio/modules/",
+        "--env=GTK_ICON_THEME_PATH=/app/share/icons:/usr/share/icons:/usr/local/share/icons",
         "--filesystem=xdg-run/dconf",
         "--filesystem=xdg-config/dconf",
         "--filesystem=xdg-run/gvfsd",
+        "--filesystem=xdg-data/icons:ro",
+        "--filesystem=xdg-data/pixmaps:ro",
+        "--filesystem=xdg-data/backgrounds:ro",
+        "--filesystem=xdg-desktop:ro",
+        "--filesystem=/run/host/usr/share/icons:ro",
+        "--filesystem=/run/host/usr/share/backgrounds:ro",
+        "--filesystem=/usr/local/share/icons:ro",
+        "--filesystem=/run/host/usr/share/glib-2.0:ro",
+        "--filesystem=/run/host/usr/local/share/glib-2.0:ro",
+        "--filesystem=/run/host/usr/share:ro",
+        "--filesystem=/run/host/usr/local/share:ro",
+        "--filesystem=/app/share/glib-2.0:ro",
+        "--filesystem=/var/cache/fontconfig:ro",
+        "--socket=pulseaudio",
         "--talk-name=ca.desrt.dconf",
         "--talk-name=org.freedesktop.Flatpak",
+        "--talk-name=org.freedesktop.portal.Desktop",
+        "--talk-name=org.freedesktop.portal.FileChooser",
+        "--talk-name=org.freedesktop.portal.Documents",
+        "--talk-name=org.PipeWire.ReserveDevice1",
+        "--talk-name=org.pulseaudio.Server",
         "--env=DCONF_USER_CONFIG_DIR=.config/dconf",
-        "--filesystem=host",
+        "--filesystem=home:ro",
         "--socket=session-bus",
         "--socket=system-bus",
         "--share=ipc",
@@ -85,7 +105,8 @@
             "name" : "gnome-tweaks",
             "buildsystem" : "meson",
             "config-opts" : [
-                "-Dprofile=development"
+                "-Dprofile=development",
+                "--libdir=lib"
             ],
             "sources" : [
                 {
@@ -94,5 +115,8 @@
                 }
             ]
         }
-    ]
+    ],
+    "build-options" : {
+        "env" : {        }
+    }
 }

@@ -38,8 +38,15 @@ tweak_sources = [
   'tweaks/tweak_group_mouse.py',
   'tweaks/tweak_group_keyboard.py',
   'tweaks/tweak_group_startup.py',
-  'tweaks/tweak_group_windows.py'
+  'tweaks/tweak_group_windows.py',
+  'tweaks/tweak_group_multitasking.py'
+]
+
+audio_sources = [
+  'audio/__init__.py',
+  'audio/audio_manager.py'
 ]
 
 python3.install_sources(shell_sources, subdir: 'gtweak')
 python3.install_sources(tweak_sources, subdir: join_paths('gtweak', 'tweaks'))
+python3.install_sources(audio_sources, subdir: join_paths('gtweak', 'audio'))

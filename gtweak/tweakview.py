@@ -3,6 +3,7 @@
 # License-Filename: LICENSES/GPL-3.0
 
 import os.path
+import logging
 from typing import List
 
 from gi.repository import Adw, Gtk, Gdk, GObject
@@ -17,6 +18,7 @@ from gtweak.tweaks.tweak_group_mouse import TWEAK_GROUP as MouseTweaks
 from gtweak.tweaks.tweak_group_keyboard import TWEAK_GROUP as KeyboardTweaks
 from gtweak.tweaks.tweak_group_sound import TWEAK_GROUP as SoundTweaks, show_sound_tweaks
 from gtweak.tweaks.tweak_group_windows import TWEAK_GROUP as WindowTweaks
+from gtweak.tweaks.tweak_group_multitasking import TWEAK_GROUP as MultitaskingTweaks
 from gtweak.tweaks.tweak_group_startup import TWEAK_GROUP as StartupApplicationTweaks
 
 tweaks = [ 
@@ -25,6 +27,7 @@ tweaks = [
     FontTweaks,
     AppearanceTweaks,
     WindowTweaks,
+    MultitaskingTweaks,
     StartupApplicationTweaks,
     SoundTweaks
 ]

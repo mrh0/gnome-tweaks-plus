@@ -4,6 +4,7 @@
 
 from gi.repository import Adw
 from gi.repository import Gtk
+from gi.repository import Gdk
 from gi.repository import Gio
 from gi.repository import GLib
 
@@ -67,11 +68,45 @@ class GnomeTweaks(Adw.Application):
 
     def do_startup(self):
         Adw.Application.do_startup(self)
+        
+        # Initialize icon theme paths early, before windows are created
+        self._init_icon_theme_paths()
 
         self.set_accels_for_action("window.close", ["<primary>w"])
         self._create_action("quit", self.quit_app, ["<primary>q"])
         self._create_action("about", self.about_cb)
         self._create_action("reset", self.reset_cb)
+
+    def _init_icon_theme_paths(self):
+        """Initialize icon theme search paths early in startup"""
+        try:
+            import logging
+            import os
+            
+            # Get icon theme for default display  
+            icon_theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
+            if not icon_theme:
+                logging.warning("Could not get icon theme for display")
+                return
+                
+            # Add search paths for system icons
+            search_paths = [
+                "/usr/share/icons",
+                "/usr/local/share/icons",
+                os.path.expanduser("~/.local/share/icons"),
+                "/app/share/icons",  # For flatpak
+            ]
+            for path in search_paths:
+                try:
+                    if os.path.isdir(path):
+                        icon_theme.add_search_path(path)
+                        logging.warning(f"Added icon search path: {path}")
+                except Exception:
+                    pass
+            logging.warning("Icon theme paths initialized in startup")
+        except Exception as e:
+            import logging
+            logging.warning(f"Error initializing icon theme: {e}")
 
     def quit_app(self, *_):
         self.quit()

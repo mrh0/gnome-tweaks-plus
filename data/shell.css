@@ -66,3 +66,12 @@
   padding-bottom: 10px;
 }
 
+/* Wallpaper grid selection highlight */
+.wallpaper-selected {
+  border: 3px solid @accent_color;
+  border-radius: 4px;
+}
+
+
+
+

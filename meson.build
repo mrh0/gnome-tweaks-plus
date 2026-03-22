@@ -26,6 +26,11 @@ dependency('pygobject-3.0', version: '>= 3.46.0')
 dependency('gudev-1.0', version: '>= 238')
 dependency('gsettings-desktop-schemas', version: '>= 46.0')
 
+# Python package dependencies
+pymod = import('python')
+python3_module = pymod.find_installation('python3')
+# Note: pulsectl should be installed via pip or package manager
+
 prefix = get_option('prefix')
 
 bindir = join_paths(prefix, get_option('bindir'))

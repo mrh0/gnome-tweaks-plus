@@ -3,11 +3,12 @@
 # License-Filename: LICENSES/GPL-3.0
 
 import gi
+import logging
 gi.require_version("GnomeDesktop", "4.0")
-from gi.repository import Gtk, GnomeDesktop, Gtk
+from gi.repository import Gtk, GnomeDesktop, Gtk, Adw
 
 from gtweak.gshellwrapper import GnomeShellFactory
-from gtweak.widgets import TweakPreferencesPage, GSettingsTweakSwitchRow, GSettingsSwitchTweakValue, _GSettingsTweak, TweakPreferencesGroup, build_label_beside_widget, Tweak
+from gtweak.widgets import TweakPreferencesPage, GSettingsTweakSwitchRow, GSettingsSwitchTweakValue, _GSettingsTweak, TweakPreferencesGroup, build_label_beside_widget, Tweak, GSettingsTweakComboRow
 from gtweak.tweakmodel import Tweak, TweakGroup
 from gtweak.gsettings import GSettingsSetting, GSettingsMissingError
 
@@ -133,6 +134,199 @@ class _XkbOption(Gtk.Expander, Tweak):
         elif active and not w._val in self._values and w._val:
             self._parent_settings.setting_add_to_list(TypingTweakGroup.XKB_GSETTINGS_NAME, w._val)
 
+class InputSourceSwitchingTweak(Gtk.Box, _GSettingsTweak):
+    """Toggle for per-window input source switching"""
+    
+    def __init__(self, **options):
+        name = _("Input Source Switching")
+        Gtk.Box.__init__(self, orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        _GSettingsTweak.__init__(self, name, "org.gnome.desktop.input-sources", "per-window", **options)
+
+        # Create a box for the radio actions
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        
+        # Create radio actions
+        self._same_source = Gtk.CheckButton.new_with_label(_("Use the same source for all windows"))
+        self._per_window = Gtk.CheckButton.new_with_label(_("Switch input sources individually for each window"))
+        self._per_window.set_group(self._same_source)
+
+        # Get initial value
+        per_window = self.settings.get_boolean(self.key_name)
+        self._same_source.set_active(not per_window)
+        self._per_window.set_active(per_window)
+
+        # Connect signals
+        self._same_source.connect('toggled', self._on_same_source_toggled)
+        self._per_window.connect('toggled', self._on_per_window_toggled)
+
+        # Connect to settings changes
+        self._settings_id = self.settings.connect("changed::" + self.key_name, self._on_settings_changed)
+
+        box.append(self._same_source)
+        box.append(self._per_window)
+        
+        self.append(box)
+        self.connect("destroy", self._on_destroy)
+
+    def _on_same_source_toggled(self, widget):
+        if widget.get_active():
+            self.settings.set_boolean(self.key_name, False)
+
+    def _on_per_window_toggled(self, widget):
+        if widget.get_active():
+            self.settings.set_boolean(self.key_name, True)
+
+    def _on_settings_changed(self, settings, key):
+        per_window = self.settings.get_boolean(self.key_name)
+        self._same_source.set_active(not per_window)
+        self._per_window.set_active(per_window)
+
+    def _on_destroy(self, widget):
+        if self._settings_id:
+            self.settings.disconnect(self._settings_id)
+
+
+class XkbModifierSelectorTweak(Adw.ActionRow, _GSettingsTweak):
+    """Selector for XKB modifier options (Alternate Characters Key or Compose Key)"""
+    
+    def __init__(self, title, option_prefix, options_list, **options):
+        """
+        Initialize the modifier selector
+        
+        Args:
+            title: Display name for this tweak
+            option_prefix: Prefix to look for in xkb-options (e.g., "lv3:", "compose:")
+            options_list: List of (key_name, display_name) tuples
+        """
+        Adw.ActionRow.__init__(self)
+        _GSettingsTweak.__init__(self, title, "org.gnome.desktop.input-sources", "xkb-options", **options)
+        
+        self.set_title(title)
+        
+        # Required by tweaks framework
+        self.loaded = True
+        self.widget_for_size_group = None
+        
+        self.option_prefix = option_prefix
+        self.options_list = options_list
+        self._settings_id = None
+        
+        # Create combo box model
+        model = Gtk.ListStore.new([str, str])
+        model.append(["", _("Disabled")])
+        for key, display_name in options_list:
+            model.append([key, display_name])
+        
+        # Create combo box
+        self.combo = Gtk.ComboBox.new_with_model(model)
+        self.combo.set_entry_text_column(1)
+        self.combo.set_size_request(300, -1)
+        
+        renderer = Gtk.CellRendererText()
+        self.combo.pack_start(renderer, True)
+        self.combo.add_attribute(renderer, "text", 1)
+        
+        self._combo_id = self.combo.connect('changed', self._on_combo_changed)
+        
+        # Add combo as suffix
+        self.add_suffix(self.combo)
+        self.set_activatable_widget(self.combo)
+        
+        # Load current value
+        self._update_combo()
+        self._settings_id = self.settings.connect("changed::xkb-options", self._on_settings_changed)
+        
+        self.connect("destroy", self._on_destroy)
+
+    def _get_current_option(self):
+        """Get the current option value from settings"""
+        xkb_options = self.settings.get_strv("xkb-options")
+        for option in xkb_options:
+            if option.startswith(self.option_prefix):
+                return option
+        return ""
+
+    def _update_combo(self):
+        """Update the combo box to show the current value"""
+        current = self._get_current_option()
+        
+        model = self.combo.get_model()
+        for i, row in enumerate(model):
+            if row[0] == current:
+                self.combo.disconnect(self._combo_id)
+                self.combo.set_active(i)
+                self._combo_id = self.combo.connect('changed', self._on_combo_changed)
+                return
+        
+        # If not found, set to disabled
+        self.combo.disconnect(self._combo_id)
+        self.combo.set_active(0)
+        self._combo_id = self.combo.connect('changed', self._on_combo_changed)
+
+    def _on_combo_changed(self, widget):
+        """Handle combo box change"""
+        model = widget.get_model()
+        active = widget.get_active()
+        
+        if active == -1:
+            return
+        
+        new_value = model[active][0]
+        
+        # Get current xkb-options
+        xkb_options = list(self.settings.get_strv("xkb-options"))
+        
+        # Remove any existing option with this prefix
+        xkb_options = [opt for opt in xkb_options if not opt.startswith(self.option_prefix)]
+        
+        # Add new value if not disabled
+        if new_value:
+            xkb_options.append(new_value)
+        
+        self.settings.disconnect(self._settings_id)
+        self.settings.set_strv("xkb-options", xkb_options)
+        self._settings_id = self.settings.connect("changed::xkb-options", self._on_settings_changed)
+
+    def _on_settings_changed(self, settings, key):
+        """Handle external settings changes"""
+        self._update_combo()
+
+    def _on_destroy(self, widget):
+        """Clean up signal connections"""
+        if self._settings_id:
+            self.settings.disconnect(self._settings_id)
+
+
+class KeyboardShortcutsTweak(Adw.ActionRow, Tweak):
+    """Navigation row to open keyboard shortcuts dialog"""
+    
+    def __init__(self, **options):
+        Adw.ActionRow.__init__(self)
+        Tweak.__init__(self, "keyboard-shortcuts", "", **options)
+        
+        self.set_title(_("View and Customize Shortcuts"))
+        self.set_activatable(True)
+        
+        # Required by tweaks framework
+        self.loaded = True
+        self.widget_for_size_group = None
+        
+        # Add arrow suffix
+        arrow = Gtk.Image.new_from_icon_name("go-next-symbolic")
+        self.add_suffix(arrow)
+        
+        # Connect to activated signal
+        self.connect("activated", self._on_activated)
+    
+    def _on_activated(self, row):
+        """Open keyboard shortcuts settings"""
+        import subprocess
+        try:
+            subprocess.Popen(["gnome-control-center", "keyboard", "shortcuts"])
+        except Exception as e:
+            logging.warning("Failed to open keyboard shortcuts: %s" % e)
+
+
 class TypingTweakGroup(Gtk.Box):
 
     XKB_GSETTINGS_SCHEMA = "org.gnome.desktop.input-sources"
@@ -175,6 +369,7 @@ class TypingTweakGroup(Gtk.Box):
     def _on_destroy(self, event):
         if (self._kdb_settings_id):
             self._kbdsettings.disconnect(self._kdb_settings_id)
+
 
 
 class KeyThemeSwitcher(GSettingsSwitchTweakValue):
@@ -227,18 +422,26 @@ class OverviewShortcutTweak(Gtk.Box, _GSettingsTweak):
         self.settings[self.key_name] = key
 
 
-class AdditionalLayoutButton(Gtk.Box, Tweak):
+class AdditionalLayoutButton(Adw.ActionRow, Tweak):
 
     def __init__(self):
-        Gtk.Box.__init__(self, orientation=Gtk.Orientation.VERTICAL, spacing=18,
-                               valign=Gtk.Align.CENTER)
+        Adw.ActionRow.__init__(self)
         Tweak.__init__(self, "extensions", "")
 
-        btn = Gtk.Button(label=_("Additional Layout Options"), halign=Gtk.Align.END)
-        btn.connect("clicked", self._on_browse_clicked)
-        self.append(btn)
+        self.set_title(_("Additional Layout Options"))
+        self.set_activatable(True)
+        
+        # Required by tweaks framework
+        self.loaded = True
+        self.widget_for_size_group = None
+        
+        # Add arrow suffix
+        arrow = Gtk.Image.new_from_icon_name("go-next-symbolic")
+        self.add_suffix(arrow)
+        
+        self.connect("activated", self._on_activated)
 
-    def _on_browse_clicked(self, btn):
+    def _on_activated(self, row):
         dialog = Gtk.Dialog()
         dialog.set_title(_("Additional Layout Options"))
         dialog.set_transient_for(self.main_window)
@@ -256,17 +459,57 @@ class AdditionalLayoutButton(Gtk.Box, Tweak):
 
 
 TWEAK_GROUP = TweakPreferencesPage("keyboard", _("Keyboard"),
-                                      GSettingsTweakSwitchRow(_("Show Extended Input Sources"),
-                          "org.gnome.desktop.input-sources",
-                          "show-all-sources",
-                          desc=_("Increases the choice of input sources in the Settings application."),
-                          logout_required=True,),        
-                                TweakPreferencesGroup(
-                                _("Layout"),    "keyboard-layout", 
-                            
-    KeyThemeSwitcher(),
-    OverviewShortcutTweak(),
-    AdditionalLayoutButton(),
-                                )
-  
+                                      TweakPreferencesGroup(
+                                          _("Input Sources"),    "input-sources",
+                                          GSettingsTweakSwitchRow(_("Show Extended Input Sources"),
+                              "org.gnome.desktop.input-sources",
+                              "show-all-sources",
+                              desc=_("Increases the choice of input sources in the Settings application."),
+                              logout_required=True,),
+                                      ),
+                                      TweakPreferencesGroup(
+                                          _("Input Source Switching"), "input-switching",
+                                          InputSourceSwitchingTweak(),
+                                      ),
+                                      TweakPreferencesGroup(
+                                          _("Special Character Entry"), "character-entry",
+                                          XkbModifierSelectorTweak(
+                                              _("Alternate Characters Key"),
+                                              "lv3:",
+                                              [
+                                                  ("lv3:lalt_switch", _("Left Alt")),
+                                                  ("lv3:ralt_switch", _("Right Alt")),
+                                                  ("lv3:lwin_switch", _("Left Super")),
+                                                  ("lv3:rwin_switch", _("Right Super")),
+                                                  ("lv3:menu_switch", _("Menu key")),
+                                                  ("lv3:switch", _("Right Ctrl")),
+                                              ]
+                                          ),
+                                          XkbModifierSelectorTweak(
+                                              _("Compose Key"),
+                                              "compose:",
+                                              [
+                                                  ("compose:ralt", _("Right Alt")),
+                                                  ("compose:lwin", _("Left Super")),
+                                                  ("compose:rwin", _("Right Super")),
+                                                  ("compose:menu", _("Menu key")),
+                                                  ("compose:lctrl", _("Left Ctrl")),
+                                                  ("compose:rctrl", _("Right Ctrl")),
+                                                  ("compose:caps", _("Caps Lock")),
+                                                  ("compose:sclk", _("Scroll Lock")),
+                                                  ("compose:prsc", _("Print Screen")),
+                                                  ("compose:ins", _("Insert")),
+                                              ]
+                                          ),
+                                      ),
+                                      TweakPreferencesGroup(
+                                          _("Keyboard Shortcuts"), "keyboard-shortcuts",
+                                          KeyboardShortcutsTweak(),
+                                      ),
+                                      TweakPreferencesGroup(
+                                          _("Layout"), "keyboard-layout",
+                                          KeyThemeSwitcher(),
+                                          OverviewShortcutTweak(),
+                                          AdditionalLayoutButton(),
+                                      )
 )
