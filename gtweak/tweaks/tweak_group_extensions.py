@@ -7,6 +7,7 @@ from gi.repository import Gtk, Adw, Gio, GLib, GObject
 from gtweak.gshellwrapper import GnomeShellFactory
 from gtweak.tweakmodel import Tweak, TweakGroup
 from gtweak.widgets import TweakPreferencesPage, TweakPreferencesGroup, GSettingsTweakSwitchRow
+from gtweak.gsettings import GSettingsSetting
 
 LOG = logging.getLogger(__name__)
 
@@ -45,6 +46,11 @@ class ExtensionRow(Adw.ExpanderRow, Tweak):
         version = extension_info.get('version', '')
         description = extension_info.get('description', '')
         
+        # Mark system extensions with an asterisk
+        is_system = extension_info.get('isSystem', False)
+        if is_system:
+            title = f"{title} *"
+        
         LOG.debug(f"Extension: {title}, Description: {description}")
         
         Tweak.__init__(
@@ -62,8 +68,7 @@ class ExtensionRow(Adw.ExpanderRow, Tweak):
             self.set_title(title)
             
             # Show version in subtitle
-            subtitle = f"v{version}" if version else _("No version")
-            self.set_subtitle(subtitle)
+            self.set_subtitle(self.uuid)
 
             # Create toggle switch
             self._switch = Gtk.Switch()
@@ -75,6 +80,21 @@ class ExtensionRow(Adw.ExpanderRow, Tweak):
             self._switch.set_active(is_enabled)
             self._switch.connect("notify::active", self._on_switch_toggled)
 
+            # Create settings button with gear icon
+            settings_button = Gtk.Button()
+            settings_button.set_icon_name("emblem-system-symbolic")
+            settings_button.set_valign(Gtk.Align.CENTER)
+            settings_button.set_tooltip_text(_("Extension Settings"))
+            settings_button.connect("clicked", self._on_settings_clicked)
+            
+            # Disable button if extension doesn't have preferences
+            has_prefs = extension_info.get('hasPrefs', False)
+            settings_button.set_sensitive(has_prefs)
+            if not has_prefs:
+                settings_button.set_tooltip_text(_("This extension does not have settings"))
+            
+            self.add_prefix(settings_button)
+
             self.add_suffix(self._switch)
 
             # Add description as expandable row
@@ -82,18 +102,8 @@ class ExtensionRow(Adw.ExpanderRow, Tweak):
                 LOG.debug(f"Adding description for {title}: {description}")
                 desc_row = Adw.ActionRow()
                 desc_row.set_title(_("Description"))
-                
-                # Create a wrapped label for the description
-                desc_label = Gtk.Label(label=description)
-                desc_label.set_wrap(True)
-                desc_label.set_halign(Gtk.Align.START)
-                desc_label.set_hexpand(True)
-                desc_label.set_margin_top(6)
-                desc_label.set_margin_bottom(6)
-                desc_label.set_margin_start(6)
-                desc_label.set_margin_end(6)
-                
-                desc_row.set_child(desc_label)
+                desc_row.set_subtitle(description)
+
                 self.add_row(desc_row)
             else:
                 LOG.debug(f"No description for {title}")
@@ -104,6 +114,13 @@ class ExtensionRow(Adw.ExpanderRow, Tweak):
                 placeholder_label.add_css_class("dim-label")
                 placeholder_row.set_child(placeholder_label)
                 self.add_row(placeholder_row)
+
+            # Add version / UUID info
+            version_row = Adw.ActionRow()
+            version_row.set_title(_("Version"))
+            subtitleVersion = f"v{version}" if version else _("No version")
+            version_row.set_subtitle(subtitleVersion)
+            self.add_row(version_row)
 
             self.widget_for_size_group = None
         except Exception as e:
@@ -144,6 +161,18 @@ class ExtensionRow(Adw.ExpanderRow, Tweak):
         self._switch.set_active(is_enabled)
         self._updating = False
 
+    def _on_settings_clicked(self, button):
+        """Open extension settings dialog"""
+        try:
+            if self._shell_proxy:
+                # Try LaunchExtensionPrefs method
+                self._shell_proxy.proxy_extensions.LaunchExtensionPrefs('(s)', self.uuid)
+                LOG.debug(f"Opened preferences for extension {self.uuid}")
+            else:
+                LOG.warning(f"Shell proxy not available to open settings for {self.uuid}")
+        except Exception as e:
+            LOG.error(f"Failed to open extension settings for {self.uuid}: {e}")
+
 
 def _load_extensions():
     """Load list of installed extensions from GNOME Shell"""
@@ -166,14 +195,21 @@ def _load_extensions():
             LOG.debug(f"Extension info for {uuid}: {info}")
             # Use uuid as fallback if name is missing or empty
             ext_name = info.get('name', '') or uuid
+            
+            # Determine if this is a system extension (installed in system directories)
+            path = info.get('path', '')
+            is_system = path.startswith('/usr') or path.startswith('/app') or 'system' in path.lower()
+            
             ext_info = {
                 'uuid': uuid,
                 'name': ext_name,
                 'description': info.get('description', ''),
                 'version': info.get('version', ''),
                 'state': info.get('state', 2),  # 1=ENABLED, 2=DISABLED, etc.
-                'path': info.get('path', ''),
+                'path': path,
                 'creator': info.get('creator', ''),
+                'hasPrefs': info.get('hasPrefs', False),
+                'isSystem': is_system,
             }
             extensions_list.append(ext_info)
         
@@ -184,6 +220,16 @@ def _load_extensions():
     except Exception as e:
         LOG.error(f"Failed to load extensions: {e}")
         return None, None
+
+
+def _on_disable_all_extensions_changed(settings, key, extension_rows):
+    """Handle changes to disable-user-extensions setting"""
+    disable_all = settings.get_boolean(key)
+    
+    # Disable individual extension switches if all extensions are disabled
+    for row in extension_rows:
+        if hasattr(row, '_switch'):
+            row._switch.set_sensitive(not disable_all)
 
 
 # Load extensions and build the group
@@ -214,10 +260,32 @@ if _extensions_list is not None and len(_extensions_list) > 0:
             *extension_rows
         )
         
+        # Setup listener for disable-all-extensions setting
+        try:
+            shell_settings = GSettingsSetting("org.gnome.shell")
+            
+            # Set initial sensitivity based on current setting
+            disable_all = shell_settings.get_boolean("disable-user-extensions")
+            for row in extension_rows:
+                if hasattr(row, '_switch'):
+                    row._switch.set_sensitive(not disable_all)
+            
+            # Connect to setting changes
+            shell_settings.connect("changed::disable-user-extensions", 
+                                   _on_disable_all_extensions_changed, 
+                                   extension_rows)
+        except Exception as e:
+            LOG.warning(f"Failed to setup disable-all-extensions listener: {e}")
+        
         # Build the page with extensions enabled toggle and extensions group
         page_tweaks = []
         if extensions_enabled_tweak and extensions_enabled_tweak.loaded:
-            page_tweaks.append(extensions_enabled_tweak)
+            general_group = TweakPreferencesGroup(
+                _("General"),
+                "general",
+                extensions_enabled_tweak
+            )
+            page_tweaks.append(general_group)
         page_tweaks.append(extensions_group)
         
         TWEAK_GROUP = TweakPreferencesPage(
@@ -230,7 +298,12 @@ if _extensions_list is not None and len(_extensions_list) > 0:
         # Fallback if no rows were created
         page_tweaks = []
         if extensions_enabled_tweak and extensions_enabled_tweak.loaded:
-            page_tweaks.append(extensions_enabled_tweak)
+            general_group = TweakPreferencesGroup(
+                _("General"),
+                "general",
+                extensions_enabled_tweak
+            )
+            page_tweaks.append(general_group)
         
         TWEAK_GROUP = TweakPreferencesPage(
             "extensions",
@@ -242,7 +315,12 @@ else:
     # Create group with just the toggle if extensions can't be loaded
     page_tweaks = []
     if extensions_enabled_tweak and extensions_enabled_tweak.loaded:
-        page_tweaks.append(extensions_enabled_tweak)
+        general_group = TweakPreferencesGroup(
+            _("General"),
+            "general",
+            extensions_enabled_tweak
+        )
+        page_tweaks.append(general_group)
     
     TWEAK_GROUP = TweakPreferencesPage(
         "extensions",
