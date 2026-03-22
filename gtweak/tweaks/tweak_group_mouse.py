@@ -475,17 +475,29 @@ class MouseTestWindow(Adw.Window):
         return False
 
 
-class TestButton(Gtk.Button, Tweak):
-    """Button to open mouse test window"""
+class TestButton(Adw.ActionRow, Tweak):
+    """Navigation row to open mouse test window"""
     def __init__(self, **options):
-        Gtk.Button.__init__(self, label=_("Test Buttons"))
+        Adw.ActionRow.__init__(self)
         Tweak.__init__(self, title="", description="", **options)
         
-        self._test_window = None
-        self.connect("clicked", self._on_clicked)
+        self.set_title(_("Test Buttons"))
+        self.set_activatable(True)
+        
+        # Required by tweaks framework
+        self.loaded = True
         self.widget_for_size_group = None
+        
+        # Add arrow suffix
+        arrow = Gtk.Image.new_from_icon_name("go-next-symbolic")
+        self.add_suffix(arrow)
+        
+        # Connect to activated signal
+        self.connect("activated", self._on_activated)
+        
+        self._test_window = None
     
-    def _on_clicked(self, button):
+    def _on_activated(self, row):
         """Open mouse test window"""
         if self._test_window is None or not self._test_window.get_visible():
             self._test_window = MouseTestWindow()

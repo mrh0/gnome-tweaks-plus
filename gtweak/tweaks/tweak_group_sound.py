@@ -7,11 +7,11 @@ import os.path
 import configparser
 import logging
 
-from gi.repository import Gtk, Adw, GLib, Gio
+from gi.repository import Gtk, Adw, GLib, Gio, Pango
 
 from gtweak.utils import get_resource_dirs
 from gtweak.widgets import (TweakPreferencesPage, TweakPreferencesGroup, GSettingsTweakComboRow, 
-                            GSettingsTweakSwitchRow, _GSettingsTweak, Tweak)
+                            GSettingsTweakSwitchRow, _GSettingsTweak, Tweak, TweakListStoreItem)
 from gtweak.audio.audio_manager import get_audio_manager, HAS_PIPEWIRE
 
 logger = logging.getLogger(__name__)
@@ -40,49 +40,33 @@ def get_sound_themes():
     return themes
 
 
-class OutputDeviceSelector(Adw.ActionRow, Tweak):
-    """Widget for selecting the default audio output device"""
+class OutputDeviceSelector(Adw.ComboRow, Tweak):
+    """Combo row for selecting the default audio output device"""
     
     def __init__(self, **options):
         logger.debug("OutputDeviceSelector.__init__() called")
-        Adw.ActionRow.__init__(self)
         Tweak.__init__(self, title="Output Device", description="", **options)
-        
-        self.set_title("Output Device")
+        Adw.ComboRow.__init__(self, title="Output Device")
         
         # Required by tweaks framework
         self.loaded = True
-        self.widget_for_size_group = None
+        self.widget_for_size_group = self
         
         self.pa_manager = get_audio_manager()
         logger.debug(f"  pa_manager type: {type(self.pa_manager).__name__ if self.pa_manager else 'None'}")
         
-        # Create combo box model with icon support
-        store = Gtk.ListStore(str, str, str)  # id, display_text, icon_name
-        self.combo_box = Gtk.ComboBox(model=store)
-        self.combo_box.set_hexpand(True)
-        self.combo_box.set_size_request(300, -1)
-        
-        # Create icon renderer
-        icon_renderer = Gtk.CellRendererPixbuf()
-        self.combo_box.pack_start(icon_renderer, False)
-        self.combo_box.add_attribute(icon_renderer, "icon-name", 2)
-        
-        # Create text renderer
-        text_renderer = Gtk.CellRendererText()
-        self.combo_box.pack_start(text_renderer, True)
-        self.combo_box.add_attribute(text_renderer, "text", 1)
+        # Build model with available devices
+        store = Gio.ListStore()
         
         if not self.pa_manager or not self.pa_manager.is_available():
             logger.warning(f"  OutputDeviceSelector: manager unavailable")
-            no_dev_iter = store.append(["", "No audio devices available", "dialog-error"])
-            self.combo_box.set_active_iter(no_dev_iter)
-            self.combo_box.set_sensitive(False)
-            self.add_suffix(self.combo_box)
+            store.append(TweakListStoreItem(value="", title=_("No audio devices available")))
+            self.set_model(store)
+            self.set_sensitive(False)
+            self._setup_factory()
             return
         
-        # Build combo box with available devices
-        logger.debug("  Building OutputDeviceSelector combo box...")
+        logger.debug("  Building OutputDeviceSelector model...")
         
         try:
             sinks = self.pa_manager.get_sinks()
@@ -90,97 +74,92 @@ class OutputDeviceSelector(Adw.ActionRow, Tweak):
             
             if not sinks or len(sinks) == 0:
                 logger.warning("  No sinks available")
-                store.append(["", "No devices found", "dialog-error"])
-                self.combo_box.set_active(0)
-                self.combo_box.set_sensitive(False)
+                store.append(TweakListStoreItem(value="", title=_("No devices found")))
+                self.set_model(store)
+                self.set_sensitive(False)
             else:
                 default_sink = self.pa_manager.get_default_sink()
                 logger.debug(f"  default_sink: {default_sink}")
                 active_idx = None
                 
                 for idx, (sink_name, sink_desc, icon_name) in enumerate(sinks):
-                    logger.debug(f"    [{idx}] {sink_desc} (ID: {sink_name}, icon: {icon_name})")
-                    store.append([sink_name, sink_desc, icon_name])
+                    logger.debug(f"    [{idx}] {sink_desc} (ID: {sink_name})")
+                    store.append(TweakListStoreItem(value=sink_name, title=sink_desc))
                     if sink_name == default_sink:
                         active_idx = idx
                 
-                if store.iter_n_children(None) > 0 and active_idx is not None:
-                    self.combo_box.set_active(active_idx)
-                    self.combo_box.connect("changed", self._on_device_changed)
-                elif store.iter_n_children(None) > 0:
-                    self.combo_box.set_active(0)
-                    self.combo_box.connect("changed", self._on_device_changed)
-                else:
-                    store.append(["", "No valid devices", "dialog-error"])
-                    self.combo_box.set_active(0)
-                    self.combo_box.set_sensitive(False)
+                self.set_model(store)
+                
+                if active_idx is not None:
+                    self.set_selected(active_idx)
+                elif len(store) > 0:
+                    self.set_selected(0)
+                
+                self.connect('notify::selected-item', self._on_device_changed)
         except Exception as e:
-            logger.error(f"  Error building combo box: {e}", exc_info=True)
-            store.append(["", "Error loading devices", "dialog-error"])
-            self.combo_box.set_active(0)
-            self.combo_box.set_sensitive(False)
+            logger.error(f"  Error building model: {e}", exc_info=True)
+            store.append(TweakListStoreItem(value="", title=_("Error loading devices")))
+            self.set_model(store)
+            self.set_sensitive(False)
         
-        self.add_suffix(self.combo_box)
-        self.set_activatable_widget(self.combo_box)
+        self._setup_factory()
     
-    def _on_device_changed(self, combo):
+    def _setup_factory(self):
+        """Set up the factory for rendering device names with ellipsizing"""
+        factory = Gtk.SignalListItemFactory()
+        factory.connect('setup', self._factory_setup)
+        factory.connect('bind', self._factory_bind)
+        self.set_factory(factory)
+    
+    def _factory_setup(self, factory, item):
+        """Create label widget with ellipsizing"""
+        label = Gtk.Label(xalign=0.0, ellipsize=Pango.EllipsizeMode.END, max_width_chars=30, valign=Gtk.Align.CENTER)
+        item.set_child(label)
+    
+    def _factory_bind(self, factory, item):
+        """Bind device name to label"""
+        label = item.get_child()
+        if label and item.get_item():
+            label.set_label(item.get_item().title)
+    
+    def _on_device_changed(self, combo, pspec):
         """Handle device selection change"""
         if not self.pa_manager or not self.pa_manager.is_available():
             return
         
-        iter_obj = combo.get_active_iter()
-        if iter_obj:
-            device_name = combo.get_model()[iter_obj][0]
-            if device_name:
-                self.pa_manager.set_default_sink(device_name)
-                logger.info(f"Changed output device to: {device_name}")
+        selected_item = self.get_selected_item()
+        if selected_item and selected_item.value:
+            self.pa_manager.set_default_sink(selected_item.value)
+            logger.info(f"Changed output device to: {selected_item.value}")
 
 
-class InputDeviceSelector(Adw.ActionRow, Tweak):
-    """Widget for selecting the default audio input device"""
+class InputDeviceSelector(Adw.ComboRow, Tweak):
+    """Combo row for selecting the default audio input device"""
     
     def __init__(self, **options):
         logger.debug("InputDeviceSelector.__init__() called")
-        Adw.ActionRow.__init__(self)
         Tweak.__init__(self, title="Input Device", description="", **options)
-        
-        self.set_title("Input Device")
+        Adw.ComboRow.__init__(self, title="Input Device")
         
         # Required by tweaks framework
         self.loaded = True
-        self.widget_for_size_group = None
+        self.widget_for_size_group = self
         
         self.pa_manager = get_audio_manager()
         logger.debug(f"  pa_manager type: {type(self.pa_manager).__name__ if self.pa_manager else 'None'}")
         
-        # Create model with: device_id (str), display_text (str), icon_name (str)
-        store = Gtk.ListStore(str, str, str)
-        self.combo_box = Gtk.ComboBox(model=store)
-        self.combo_box.set_hexpand(True)
-        self.combo_box.set_size_request(300, -1)
-        
-        # Create cell renderers
-        icon_renderer = Gtk.CellRendererPixbuf()
-        text_renderer = Gtk.CellRendererText()
-        
-        # Pack renderers
-        self.combo_box.pack_start(icon_renderer, False)
-        self.combo_box.pack_start(text_renderer, True)
-        
-        # Add attributes
-        self.combo_box.add_attribute(icon_renderer, "icon-name", 2)
-        self.combo_box.add_attribute(text_renderer, "text", 1)
+        # Build model with available devices
+        store = Gio.ListStore()
         
         if not self.pa_manager or not self.pa_manager.is_available():
             logger.warning(f"  InputDeviceSelector: manager unavailable")
-            store.append(["no-device", "No audio devices available", "audio-input-microphone"])
-            self.combo_box.set_active(0)
-            self.combo_box.set_sensitive(False)
-            self.add_suffix(self.combo_box)
+            store.append(TweakListStoreItem(value="", title=_("No audio devices available")))
+            self.set_model(store)
+            self.set_sensitive(False)
+            self._setup_factory()
             return
         
-        # Build combo box with available devices
-        logger.debug("  Building InputDeviceSelector combo box...")
+        logger.debug("  Building InputDeviceSelector model...")
         
         try:
             sources = self.pa_manager.get_sources()
@@ -188,48 +167,61 @@ class InputDeviceSelector(Adw.ActionRow, Tweak):
             
             if not sources or len(sources) == 0:
                 logger.warning("  No sources available")
-                store.append(["no-device", "No devices found", "audio-input-microphone"])
-                self.combo_box.set_active(0)
-                self.combo_box.set_sensitive(False)
+                store.append(TweakListStoreItem(value="", title=_("No devices found")))
+                self.set_model(store)
+                self.set_sensitive(False)
             else:
                 default_source = self.pa_manager.get_default_source()
                 logger.debug(f"  default_source: {default_source}")
                 active_idx = 0
                 
                 for idx, (source_name, source_desc, icon_name) in enumerate(sources):
-                    # source_name is the device ID, source_desc is the human-readable description
-                    logger.debug(f"    [{idx}] {source_desc} (ID: {source_name}, icon: {icon_name})")
-                    store.append([source_name, source_desc, icon_name])
+                    logger.debug(f"    [{idx}] {source_desc} (ID: {source_name})")
+                    store.append(TweakListStoreItem(value=source_name, title=source_desc))
                     if source_name == default_source:
                         active_idx = idx
                 
+                self.set_model(store)
+                
                 if len(store) > 0:
-                    self.combo_box.set_active(active_idx)
-                    self.combo_box.connect("changed", self._on_device_changed)
-                else:
-                    store.append(["no-device", "No valid devices", "audio-input-microphone"])
-                    self.combo_box.set_active(0)
-                    self.combo_box.set_sensitive(False)
+                    self.set_selected(active_idx)
+                
+                self.connect('notify::selected-item', self._on_device_changed)
         except Exception as e:
-            logger.error(f"  Error building combo box: {e}", exc_info=True)
-            store.append(["error", "Error loading devices", "audio-input-microphone"])
-            self.combo_box.set_active(0)
-            self.combo_box.set_sensitive(False)
+            logger.error(f"  Error building model: {e}", exc_info=True)
+            store.append(TweakListStoreItem(value="", title=_("Error loading devices")))
+            self.set_model(store)
+            self.set_sensitive(False)
         
-        self.add_suffix(self.combo_box)
-        self.set_activatable_widget(self.combo_box)
+        self._setup_factory()
     
-    def _on_device_changed(self, combo):
+    def _setup_factory(self):
+        """Set up the factory for rendering device names with ellipsizing"""
+        factory = Gtk.SignalListItemFactory()
+        factory.connect('setup', self._factory_setup)
+        factory.connect('bind', self._factory_bind)
+        self.set_factory(factory)
+    
+    def _factory_setup(self, factory, item):
+        """Create label widget with ellipsizing"""
+        label = Gtk.Label(xalign=0.0, ellipsize=Pango.EllipsizeMode.END, max_width_chars=30, valign=Gtk.Align.CENTER)
+        item.set_child(label)
+    
+    def _factory_bind(self, factory, item):
+        """Bind device name to label"""
+        label = item.get_child()
+        if label and item.get_item():
+            label.set_label(item.get_item().title)
+    
+    def _on_device_changed(self, combo, pspec):
         """Handle device selection change"""
         if not self.pa_manager or not self.pa_manager.is_available():
             return
         
-        iter_obj = combo.get_active_iter()
-        if iter_obj:
-            device_name = combo.get_model()[iter_obj][0]
-            if device_name:
-                self.pa_manager.set_default_source(device_name)
-                logger.info(f"Changed input device to: {device_name}")
+        selected_item = self.get_selected_item()
+        if selected_item and selected_item.value:
+            self.pa_manager.set_default_source(selected_item.value)
+            logger.info(f"Changed input device to: {selected_item.value}")
 
 
 class VolumeControl(Adw.ActionRow, Tweak):

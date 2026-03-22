@@ -5,10 +5,10 @@
 import gi
 import logging
 gi.require_version("GnomeDesktop", "4.0")
-from gi.repository import Gtk, GnomeDesktop, Gtk, Adw
+from gi.repository import Gtk, GnomeDesktop, Gtk, Adw, Gio, Pango
 
 from gtweak.gshellwrapper import GnomeShellFactory
-from gtweak.widgets import TweakPreferencesPage, GSettingsTweakSwitchRow, GSettingsSwitchTweakValue, _GSettingsTweak, TweakPreferencesGroup, build_label_beside_widget, Tweak, GSettingsTweakComboRow
+from gtweak.widgets import TweakPreferencesPage, GSettingsTweakSwitchRow, GSettingsSwitchTweakValue, _GSettingsTweak, TweakPreferencesGroup, build_label_beside_widget, Tweak, GSettingsTweakComboRow, TweakListStoreItem
 from gtweak.tweakmodel import Tweak, TweakGroup
 from gtweak.gsettings import GSettingsSetting, GSettingsMissingError
 
@@ -186,8 +186,8 @@ class InputSourceSwitchingTweak(Gtk.Box, _GSettingsTweak):
             self.settings.disconnect(self._settings_id)
 
 
-class XkbModifierSelectorTweak(Adw.ActionRow, _GSettingsTweak):
-    """Selector for XKB modifier options (Alternate Characters Key or Compose Key)"""
+class XkbModifierSelectorComboRow(Adw.ComboRow, _GSettingsTweak):
+    """Combo row selector for XKB modifier options using the standard dropdown UI"""
     
     def __init__(self, title, option_prefix, options_list, **options):
         """
@@ -198,82 +198,79 @@ class XkbModifierSelectorTweak(Adw.ActionRow, _GSettingsTweak):
             option_prefix: Prefix to look for in xkb-options (e.g., "lv3:", "compose:")
             options_list: List of (key_name, display_name) tuples
         """
-        Adw.ActionRow.__init__(self)
         _GSettingsTweak.__init__(self, title, "org.gnome.desktop.input-sources", "xkb-options", **options)
-        
-        self.set_title(title)
-        
-        # Required by tweaks framework
-        self.loaded = True
-        self.widget_for_size_group = None
-        
+        Adw.ComboRow.__init__(self, title=title)
+
         self.option_prefix = option_prefix
         self.options_list = options_list
-        self._settings_id = None
+        self.loaded = True
+        self.widget_for_size_group = self
         
-        # Create combo box model
-        model = Gtk.ListStore.new([str, str])
-        model.append(["", _("Disabled")])
+        # Build model with Disabled option + all options
+        model_items = [TweakListStoreItem(value="", title=_("Disabled"))]
         for key, display_name in options_list:
-            model.append([key, display_name])
+            model_items.append(TweakListStoreItem(value=key, title=display_name))
         
-        # Create combo box
-        self.combo = Gtk.ComboBox.new_with_model(model)
-        self.combo.set_entry_text_column(1)
-        self.combo.set_size_request(300, -1)
+        store = Gio.ListStore()
+        for item in model_items:
+            store.append(item)
         
-        renderer = Gtk.CellRendererText()
-        self.combo.pack_start(renderer, True)
-        self.combo.add_attribute(renderer, "text", 1)
+        self.set_model(store)
         
-        self._combo_id = self.combo.connect('changed', self._on_combo_changed)
+        # Set up factory for rendering
+        factory = Gtk.SignalListItemFactory()
+        factory.connect('setup', self._factory_setup)
+        factory.connect('bind', self._factory_bind)
+        self.set_factory(factory)
         
-        # Add combo as suffix
-        self.add_suffix(self.combo)
-        self.set_activatable_widget(self.combo)
+        # Load current value and listen for changes
+        self.settings.connect('changed::xkb-options', self._on_settings_changed)
+        self._update_combo_for_setting()
         
-        # Load current value
-        self._update_combo()
-        self._settings_id = self.settings.connect("changed::xkb-options", self._on_settings_changed)
-        
-        self.connect("destroy", self._on_destroy)
+        # Connect to combo changes
+        self.connect('notify::selected-item', self._on_combo_changed)
+
+    def _factory_setup(self, factory, item):
+        label = Gtk.Label(xalign=0.0, ellipsize=Pango.EllipsizeMode.END, max_width_chars=20, valign=Gtk.Align.CENTER)
+        item.set_child(label)
+
+    def _factory_bind(self, factory, item):
+        label = item.get_child()
+        if label and item.get_item():
+            label.set_label(item.get_item().title)
 
     def _get_current_option(self):
-        """Get the current option value from settings"""
+        """Get the current option value from xkb-options array"""
         xkb_options = self.settings.get_strv("xkb-options")
         for option in xkb_options:
             if option.startswith(self.option_prefix):
                 return option
         return ""
 
-    def _update_combo(self):
-        """Update the combo box to show the current value"""
+    def _update_combo_for_setting(self):
+        """Update combo box to show current value"""
         current = self._get_current_option()
+        model = self.get_model()
         
-        model = self.combo.get_model()
-        for i, row in enumerate(model):
-            if row[0] == current:
-                self.combo.disconnect(self._combo_id)
-                self.combo.set_active(i)
-                self._combo_id = self.combo.connect('changed', self._on_combo_changed)
+        for i in range(len(model)):
+            if model[i].value == current:
+                self.set_selected(i)
                 return
         
-        # If not found, set to disabled
-        self.combo.disconnect(self._combo_id)
-        self.combo.set_active(0)
-        self._combo_id = self.combo.connect('changed', self._on_combo_changed)
+        # If not found, select disabled (first item)
+        self.set_selected(0)
 
-    def _on_combo_changed(self, widget):
-        """Handle combo box change"""
-        model = widget.get_model()
-        active = widget.get_active()
-        
-        if active == -1:
+    def _on_settings_changed(self, settings, key):
+        """Handle external settings changes"""
+        self._update_combo_for_setting()
+
+    def _on_combo_changed(self, combo, pspec):
+        """Handle combo box selection changes"""
+        selected_item = self.get_selected_item()
+        if selected_item is None:
             return
         
-        new_value = model[active][0]
-        
-        # Get current xkb-options
+        new_value = selected_item.value
         xkb_options = list(self.settings.get_strv("xkb-options"))
         
         # Remove any existing option with this prefix
@@ -283,18 +280,8 @@ class XkbModifierSelectorTweak(Adw.ActionRow, _GSettingsTweak):
         if new_value:
             xkb_options.append(new_value)
         
-        self.settings.disconnect(self._settings_id)
         self.settings.set_strv("xkb-options", xkb_options)
-        self._settings_id = self.settings.connect("changed::xkb-options", self._on_settings_changed)
 
-    def _on_settings_changed(self, settings, key):
-        """Handle external settings changes"""
-        self._update_combo()
-
-    def _on_destroy(self, widget):
-        """Clean up signal connections"""
-        if self._settings_id:
-            self.settings.disconnect(self._settings_id)
 
 
 class KeyboardShortcutsTweak(Adw.ActionRow, Tweak):
@@ -466,14 +453,11 @@ TWEAK_GROUP = TweakPreferencesPage("keyboard", _("Keyboard"),
                               "show-all-sources",
                               desc=_("Increases the choice of input sources in the Settings application."),
                               logout_required=True,),
-                                      ),
-                                      TweakPreferencesGroup(
-                                          _("Input Source Switching"), "input-switching",
                                           InputSourceSwitchingTweak(),
                                       ),
                                       TweakPreferencesGroup(
                                           _("Special Character Entry"), "character-entry",
-                                          XkbModifierSelectorTweak(
+                                          XkbModifierSelectorComboRow(
                                               _("Alternate Characters Key"),
                                               "lv3:",
                                               [
@@ -485,7 +469,7 @@ TWEAK_GROUP = TweakPreferencesPage("keyboard", _("Keyboard"),
                                                   ("lv3:switch", _("Right Ctrl")),
                                               ]
                                           ),
-                                          XkbModifierSelectorTweak(
+                                          XkbModifierSelectorComboRow(
                                               _("Compose Key"),
                                               "compose:",
                                               [
