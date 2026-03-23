@@ -60,6 +60,8 @@ class DBusDisplayManager:
         self.connected = False
         self._modes_cache = {}  # Cache of mode data
         self._service_available = False
+        self._serial = 0  # Current DBus serial for applying changes
+        self._displays_info_cache = None  # Cache of full display info including connectors
         
         if Gio is None:
             logger.error("DBusDisplayManager: GIO not available")
@@ -107,13 +109,36 @@ class DBusDisplayManager:
         """Check if display manager is available"""
         return self.connected and self.mutter_proxy is not None
     
+    def get_raw_resources(self) -> Optional[Any]:
+        """
+        Get raw DBus response for diagnostics.
+        Returns the unpacked GetResources response or None if unavailable.
+        """
+        if not self.is_available():
+            logger.warning("Display manager not available")
+            return None
+        
+        try:
+            result = self.mutter_proxy.call_sync(
+                "GetResources",
+                None,
+                Gio.DBusCallFlags.NONE,
+                -1,
+                None
+            )
+            if result:
+                return result.unpack()
+        except Exception as e:
+            logger.error(f"Failed to get raw resources: {e}")
+        return None
+    
     def get_displays(self) -> List[Dict[str, Any]]:
         """
         Get list of available displays using Mutter DisplayConfig GetResources.
         Parses the complex DBus response to extract display names, resolutions, and framerates.
         
         Returns:
-            List of dicts with: name, connected, primary, resolution, framerate, modes
+            List of dicts with: name, connected, primary, resolution, framerate, modes, connector, mode_idx
         """
         if not self.is_available():
             if not self._service_available:
@@ -138,120 +163,172 @@ class DBusDisplayManager:
                 return []
             
             items = result.unpack()
+            logger.debug(f"DBusDisplayManager: GetResources returned {len(items)} items")
+            
             if len(items) < 4:
-                logger.error(f"DBusDisplayManager: GetResources returned unexpected data (got {len(items)} items)")
+                logger.error(f"DBusDisplayManager: GetResources returned unexpected data (got {len(items)} items, expected >= 4)")
                 return []
             
             # GetResources returns: (serial, crtcs, logical_monitors, modes, ...)
+            # NOTE: The structure is different - connectors are embedded in logical_monitors, not separate
             serial = items[0]
-            crtcs = items[1]
-            logical_monitors = items[2]
-            modes_data = items[3]
+            crtcs = items[1] if isinstance(items[1], (list, tuple)) else []
+            logical_monitors = items[2] if isinstance(items[2], (list, tuple)) else []
+            modes_data = items[3] if isinstance(items[3], (list, tuple)) else []
+            
+            self._serial = serial
             
             logger.debug(f"DBusDisplayManager: GetResources - serial={serial}, crtcs={len(crtcs)}, "
                         f"logical_monitors={len(logical_monitors)}, modes={len(modes_data)}")
             
             # Build modes cache for quick lookup by mode index
-            # Modes are indexed 0...N and each has (index, unknown, width, height, refresh_rate, unknown)
+            # Modes format: (?, ?, width, height, refresh_rate, ...)
+            # The first 2 elements are metadata, actual resolution starts at index 2
             self._modes_cache = {}
             for mode_idx, mode_tuple in enumerate(modes_data):
                 if isinstance(mode_tuple, (tuple, list)) and len(mode_tuple) >= 5:
-                    width = mode_tuple[2]
-                    height = mode_tuple[3]
-                    # Refresh rate is in Hz already (or needs conversion)
-                    refresh_rate = float(mode_tuple[4])
-                    self._modes_cache[mode_idx] = {
-                        'width': width,
-                        'height': height,
-                        'refresh_rate': refresh_rate
-                    }
+                    try:
+                        # Skip first 2 elements, actual data starts at index 2
+                        width = int(mode_tuple[2])
+                        height = int(mode_tuple[3])
+                        # Refresh rate might be in mHz (thousandths of Hz), convert if needed
+                        refresh_rate = float(mode_tuple[4])
+                        if refresh_rate > 1000:  # Likely in mHz, convert to Hz
+                            refresh_rate = refresh_rate / 1000.0
+                        
+                        self._modes_cache[mode_idx] = {
+                            'width': width,
+                            'height': height,
+                            'refresh_rate': refresh_rate
+                        }
+                        
+                        # Debug: log some key modes
+                        if mode_idx in (0, 1, 353, 354) or (width > 1920):
+                            logger.debug(f"  Mode {mode_idx}: {width}x{height} @ {refresh_rate}Hz (raw: {mode_tuple[:5]})")
+                    except (ValueError, TypeError, IndexError) as e:
+                        logger.debug(f"  Error parsing mode {mode_idx}: {e}")
+                        continue
+                    except (ValueError, TypeError, IndexError) as e:
+                        logger.debug(f"  Error parsing mode {mode_idx}: {e}")
+                        continue
             
             logger.debug(f"DBusDisplayManager: Cached {len(self._modes_cache)} modes")
             
-            # Process logical monitors (these have display names and current configuration)
+            # Process logical monitors
+            # NEW STRUCTURE: connectors are embedded in logical_monitors!
+            # Logical monitor format: (x, y, scale, [crtc_indices], connector_name, [mode_indices], {properties})
             displays = []
             for logical_idx, logical_monitor in enumerate(logical_monitors):
                 try:
-                    if len(logical_monitor) < 6:
-                        logger.debug(f"DBusDisplayManager: Logical monitor {logical_idx} has incomplete data")
+                    if not isinstance(logical_monitor, (tuple, list)):
+                        logger.debug(f"Logical monitor {logical_idx} is not a tuple/list, skipping")
                         continue
                     
-                    # Logical monitor structure from DBus:
+                    if len(logical_monitor) < 5:
+                        logger.debug(f"Logical monitor {logical_idx} has incomplete data ({len(logical_monitor)} elements)")
+                        continue
+                    
+                    # NEW structure from recent Ubuntu/GNOME versions:
                     # [0] = x position
                     # [1] = y position  
-                    # [2] = scale
+                    # [2] = transform/rotation (not scale!)
                     # [3] = crtc_indices (list)
-                    # [4] = display_name (string)
-                    # [5] = mode_indices (list of indices into modes array)
-                    # [6] = empty list
-                    # [7] = properties_dict with 'primary' key
+                    # [4] = connector_name (STRING, not index!)
+                    # [5] = supported_mode_indices (list)
+                    # [6] = unknown (empty list in current format)
+                    # [7] = properties dict
                     
-                    x_pos = logical_monitor[0]
-                    y_pos = logical_monitor[1]
-                    crtc_indices = logical_monitor[3] if len(logical_monitor) > 3 else []
-                    display_name = logical_monitor[4]
-                    mode_indices = logical_monitor[5] if len(logical_monitor) > 5 else []
-                    properties = logical_monitor[7] if len(logical_monitor) > 7 else {}
-                    is_primary = properties.get('primary', False) if isinstance(properties, dict) else False
+                    if len(logical_monitor) < 8:
+                        logger.debug(f"Logical monitor {logical_idx} has fewer than 8 elements ({len(logical_monitor)}), trying to parse anyway")
                     
-                    # Get current mode (first or primary mode)
+                    x_pos = int(logical_monitor[0])
+                    y_pos = int(logical_monitor[1])
+                    transform = int(logical_monitor[2]) if len(logical_monitor) > 2 else 0
+                    # Scale should come from somewhere else - for now default to 1.0
+                    scale = 1.0
+                    crtc_indices = logical_monitor[3] if isinstance(logical_monitor[3], (list, tuple)) else []
+                    connector_name = str(logical_monitor[4]) if len(logical_monitor) > 4 else "Unknown"
+                    supported_modes = logical_monitor[5] if isinstance(logical_monitor[5], (list, tuple)) else []
+                    properties = logical_monitor[7] if isinstance(logical_monitor[7], dict) and len(logical_monitor) > 7 else logical_monitor[6] if isinstance(logical_monitor[6], dict) else {}
+                    
+                    logger.debug(f"Logical monitor {logical_idx}: x={x_pos}, y={y_pos}, "
+                               f"connector={connector_name}, supported_modes={len(supported_modes)}, props_keys={list(properties.keys())[:5]}")
+                    
+                    # Get primary status from properties
+                    is_primary = properties.get('primary', False)
+                    
+                    # Get current resolution from properties if available
+                    # Otherwise use the BEST (largest) supported mode
                     current_resolution = None
                     current_framerate = None
-                    if crtc_indices and len(crtc_indices) > 0:
-                        crtc_idx = crtc_indices[0]
-                        if crtc_idx < len(crtcs):
-                            crtc = crtcs[crtc_idx]
-                            if len(crtc) > 1:
-                                current_mode_idx = crtc[1]  # Mode index in crtc
-                                if current_mode_idx in self._modes_cache:
-                                    mode_data = self._modes_cache[current_mode_idx]
-                                    current_resolution = f"{mode_data['width']}x{mode_data['height']}"
-                                    current_framerate = mode_data['refresh_rate']
+                    physical_width = 0
+                    physical_height = 0
+                    mode_idx = None
                     
-                    # Get available modes for this display
-                    available_modes = []
-                    logger.debug(f"DBusDisplayManager: Processing display '{display_name}': "
-                               f"mode_indices={mode_indices}, num_modes_in_cache={len(self._modes_cache)}")
-                    if mode_indices:
-                        for mode_idx in mode_indices:
-                            if mode_idx in self._modes_cache:
-                                mode_data = self._modes_cache[mode_idx]
-                                res_str = f"{mode_data['width']}x{mode_data['height']}"
-                                available_modes.append({
-                                    'resolution': res_str,
-                                    'framerate': mode_data['refresh_rate']
-                                })
-                                logger.debug(f"  Added mode: {res_str} @ {mode_data['refresh_rate']}Hz")
-                            else:
-                                logger.debug(f"  Mode index {mode_idx} not in cache (cache has {list(self._modes_cache.keys())})")
-                    else:
-                        logger.debug(f"  No mode_indices for display '{display_name}'")
+                    # Find the best mode (largest resolution)
+                    best_mode_idx = None
+                    best_area = 0
+                    for m_idx in supported_modes:
+                        if m_idx in self._modes_cache:
+                            mode_data = self._modes_cache[m_idx]
+                            area = mode_data['width'] * mode_data['height']
+                            if area > best_area:
+                                best_area = area
+                                best_mode_idx = m_idx
+                    
+                    if best_mode_idx is not None:
+                        mode_idx = best_mode_idx
+                        mode_data = self._modes_cache[mode_idx]
+                        current_resolution = f"{mode_data['width']}x{mode_data['height']}"
+                        current_framerate = mode_data['refresh_rate']
+                        physical_width = mode_data['width']
+                        physical_height = mode_data['height']
+                        logger.debug(f"  Using best mode {mode_idx}: {current_resolution} @ {current_framerate}Hz")
+                    
+                    # Expand mode indices into full mode dicts for compatibility with existing code
+                    expanded_modes = []
+                    for m_idx in supported_modes:
+                        if m_idx in self._modes_cache:
+                            mode_data = self._modes_cache[m_idx]
+                            expanded_modes.append({
+                                'resolution': f"{mode_data['width']}x{mode_data['height']}",
+                                'framerate': mode_data['refresh_rate'],
+                                'width': mode_data['width'],
+                                'height': mode_data['height'],
+                                'index': m_idx
+                            })
                     
                     display = {
-                        'name': display_name,
+                        'name': connector_name,
+                        'connector': connector_name,
                         'connected': True,
                         'primary': is_primary,
                         'resolution': current_resolution,
                         'framerate': current_framerate,
-                        'modes': available_modes,
+                        'modes': expanded_modes,
                         'x': x_pos,
-                        'y': y_pos
+                        'y': y_pos,
+                        'scale': scale,
+                        'mode_idx': mode_idx,
+                        'physical_width': physical_width,
+                        'physical_height': physical_height,
+                        'properties': properties
                     }
                     
                     displays.append(display)
-                    logger.debug(f"DBusDisplayManager: Added display '{display_name}' - "
-                               f"resolution={current_resolution}, framerate={current_framerate}Hz, "
-                               f"primary={is_primary}, available_modes={len(available_modes)}")
+                    logger.debug(f"Added display: {connector_name} at ({x_pos}, {y_pos}), "
+                               f"resolution={current_resolution}, primary={is_primary}, "
+                               f"modes={len(expanded_modes)}")
                 
-                except (IndexError, KeyError, TypeError) as e:
-                    logger.debug(f"DBusDisplayManager: Error parsing logical monitor {logical_idx}: {e}")
+                except (IndexError, KeyError, TypeError, ValueError) as e:
+                    logger.debug(f"Error parsing logical monitor {logical_idx}: {type(e).__name__}: {e}")
                     continue
             
+            self._displays_info_cache = displays
             logger.info(f"DBusDisplayManager: Found {len(displays)} displays")
             return displays
         
         except GLib.GError as ge:
-            # Handle GLib DBus errors specifically
             if "ServiceUnknown" in str(ge):
                 if not self._service_available:
                     logger.debug("DBusDisplayManager: Mutter service is not available")
@@ -260,6 +337,9 @@ class DBusDisplayManager:
                     self._service_available = False
             else:
                 logger.error(f"DBusDisplayManager.get_displays: DBus error: {type(ge).__name__}: {ge}")
+            return []
+        except TypeError as te:
+            logger.error(f"DBusDisplayManager.get_displays: TypeError: {te}")
             return []
         except Exception as e:
             logger.error(f"DBusDisplayManager.get_displays: {type(e).__name__}: {e}")
@@ -278,6 +358,103 @@ class DBusDisplayManager:
         """Set a display as primary via DBus ApplyMonitorsConfig"""
         logger.warning(f"DBusDisplayManager.set_primary_display: Not yet implemented")
         return False
+    
+    def apply_display_arrangement(self, arrangement: List[Dict[str, Any]]) -> bool:
+        """
+        Apply display arrangement configuration via DBus ApplyMonitorsConfig.
+        
+        Args:
+            arrangement: List of dicts with display configuration:
+                {
+                    'connector': 'HDMI-1',
+                    'x': 0,
+                    'y': 0,
+                    'mode_idx': 0,
+                    'scale': 1.0,
+                    'transform': 0,
+                    'primary': False
+                }
+        
+        Returns:
+            True if configuration was applied successfully
+        """
+        if not self.is_available():
+            logger.error("DBusDisplayManager.apply_display_arrangement: Manager not available")
+            return False
+        
+        try:
+            # Refresh displays to get current state
+            self.get_displays()
+            
+            # Build logical monitors array for DBus
+            logical_monitors = []
+            for config in arrangement:
+                connector = config.get('connector')
+                x = int(config.get('x', 0))
+                y = int(config.get('y', 0))
+                scale = float(config.get('scale', 1.0))
+                transform = int(config.get('transform', 0))
+                primary = bool(config.get('primary', False))
+                mode_idx = int(config.get('mode_idx', 0))
+                
+                # Find connector index
+                displays = self._displays_info_cache or self.get_displays()
+                display = next((d for d in displays if d['connector'] == connector), None)
+                
+                if not display:
+                    logger.warning(f"Connector '{connector}' not found in display info")
+                    continue
+                
+                connector_idx = display.get('connector_idx', 0)
+                
+                # Build logical monitor: [x, y, scale, transform, primary, [[connector_idx, mode_idx, ...]]]
+                logical_monitor = [
+                    x,
+                    y,
+                    scale,
+                    transform,
+                    primary,
+                    [[connector_idx, mode_idx]]  # Nested list for monitors
+                ]
+                logical_monitors.append(logical_monitor)
+                
+                logger.debug(f"Display arrangement: {connector} at ({x}, {y}), "
+                           f"scale={scale}, primary={primary}, mode_idx={mode_idx}")
+            
+            if not logical_monitors:
+                logger.error("No valid logical monitors to apply")
+                return False
+            
+            # Call ApplyMonitorsConfig with method=1 (persistent)
+            # Parameters: (serial, method, logical_monitors, options)
+            method = 1  # 1 = persistent, 0 = verify, 2 = temporary
+            options_dict = {}  # Additional options (usually empty)
+            
+            logger.info(f"Applying display configuration with serial={self._serial}, "
+                       f"method={method}, {len(logical_monitors)} monitors")
+            
+            result = self.mutter_proxy.call_sync(
+                "ApplyMonitorsConfig",
+                GLib.Variant("(uua(iiiuua(iu))a{sv})",
+                            (self._serial, method, logical_monitors, options_dict)),
+                Gio.DBusCallFlags.NONE,
+                -1,
+                None
+            )
+            
+            if result:
+                logger.info("Display configuration applied successfully")
+                return True
+            else:
+                logger.error("ApplyMonitorsConfig returned no result")
+                return False
+        
+        except GLib.GError as ge:
+            logger.error(f"DBusDisplayManager.apply_display_arrangement: DBus error: {type(ge).__name__}: {ge}")
+            return False
+        except Exception as e:
+            logger.error(f"DBusDisplayManager.apply_display_arrangement: {type(e).__name__}: {e}")
+            return False
     
     def set_resolution(self, display_name: str, width: int, height: int) -> bool:
         """Set display resolution via DBus"""

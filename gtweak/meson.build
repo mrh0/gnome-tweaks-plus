@@ -53,7 +53,8 @@ audio_sources = [
 
 display_sources = [
   'display/__init__.py',
-  'display/display_manager.py'
+  'display/display_manager.py',
+  'display/screen_arrangement.py'
 ]
 
 python3.install_sources(shell_sources, subdir: 'gtweak')

@@ -24,13 +24,17 @@ from gtweak.display.display_manager import (
     get_display_manager,
     DisplayMode,
 )
+from gtweak.display.screen_arrangement import ScreenArrangementWidget
 
 logger = logging.getLogger(__name__)
 
-# Set up translation function
-def _(msg):
-    """Translation wrapper"""
-    return msg
+# Set up translation function - gets injected by framework, provide fallback
+try:
+    _
+except NameError:
+    def _(msg):
+        """Translation wrapper - fallback"""
+        return msg
 
 
 # ===== ADVANCED DISPLAY SETTINGS =====
@@ -456,17 +460,36 @@ class DisplayModeSelector(Adw.ActionRow, Tweak):
         
         # Check if we have multiple displays
         try:
+            import os
+            xdg_session = os.environ.get('XDG_SESSION_TYPE', '').lower()
+            
             displays = self.display_mgr.get_displays()
             connected = [d['name'] for d in displays if d['connected']]
             self._has_multiple_displays = len(connected) > 1
-            logger.debug(f"DisplayModeSelector: Found {len(connected)} connected displays at init")
+            
+            logger.debug(f"DisplayModeSelector: XDG_SESSION_TYPE={xdg_session}")
+            logger.debug(f"DisplayModeSelector: Display manager available: {self.display_mgr.is_available()}")
+            logger.debug(f"DisplayModeSelector: Found {len(displays)} total displays, {len(connected)} connected")
+            
             if not self._has_multiple_displays:
-                logger.warning(f"DisplayModeSelector: Only {len(connected)} display(s) found, display mode selection disabled")
-                self.set_sensitive(False)
-                self.set_subtitle(_("Multiple displays required"))
+                if len(connected) == 0 and xdg_session != 'wayland':
+                    logger.warning(f"DisplayModeSelector: Not on Wayland (session: {xdg_session}), "
+                                 f"display control requires Wayland")
+                    self.set_sensitive(False)
+                    self.set_subtitle(_("Requires Wayland session"))
+                elif self.display_mgr.is_available() and len(connected) == 0:
+                    logger.warning(f"DisplayModeSelector: Wayland detected but no displays found. "
+                                 f"This may indicate a DBus or container issue.")
+                    self.set_sensitive(False)
+                    self.set_subtitle(_("No displays detected"))
+                else:
+                    logger.warning(f"DisplayModeSelector: Only {len(connected)} display(s) found, "
+                                 f"display mode selection disabled")
+                    self.set_sensitive(False)
+                    self.set_subtitle(_("Multiple displays required"))
                 return
         except Exception as e:
-            logger.warning(f"DisplayModeSelector: Error checking displays at init: {e}")
+            logger.warning(f"DisplayModeSelector: Error checking displays at init: {type(e).__name__}: {e}")
             self.set_sensitive(False)
             self.set_subtitle(_("Unable to detect displays"))
             return
@@ -852,6 +875,99 @@ class NightLightTemperature(Adw.ActionRow, Tweak):
             logger.debug(f"Could not update temperature slider: {e}")
 
 
+class ScreenArrangementTweak(Adw.PreferencesGroup, Tweak):
+    """Screen arrangement tweak for configuring multiple display positions"""
+    
+    def __init__(self, **options):
+        Adw.PreferencesGroup.__init__(self, title=_("Screen Arrangement"))
+        Tweak.__init__(
+            self,
+            title=_("Screen Arrangement"),
+            description=_("Arrange and position your displays"),
+            **options
+        )
+        
+        self.display_mgr = get_display_manager()
+        self.loaded = self.display_mgr is not None
+        
+        if not self.loaded:
+            logger.warning("ScreenArrangementTweak: Display manager not available")
+            # Add a label explaining that display configuration is not available
+            label = Gtk.Label(label=_("Display configuration is not available in this environment"))
+            label.add_css_class("dim-label")
+            self.add(label)
+            return
+        
+        # Check for multiple displays
+        displays = self.display_mgr.get_displays()
+        connected = [d for d in displays if d['connected']]
+        
+        if len(connected) < 2:
+            label = Gtk.Label(label=_("Only one display detected. Display arrangement requires multiple displays."))
+            label.add_css_class("dim-label")
+            label.set_wrap(True)
+            self.add(label)
+            return
+        
+        # Create the screen arrangement widget
+        self.arrangement_widget = ScreenArrangementWidget()
+        self.arrangement_widget.set_displays(displays)
+        self.arrangement_widget.connect("apply-arrangement", self._on_apply_arrangement)
+        
+        self.add(self.arrangement_widget)
+        
+        logger.debug(f"ScreenArrangementTweak: Initialized with {len(connected)} displays")
+    
+    def _on_apply_arrangement(self, widget, arrangement):
+        """Handle apply arrangement button click"""
+        try:
+            logger.info(f"Applying display arrangement: {arrangement}")
+            
+            # Create a dialog to confirm
+            parent = widget.get_root()
+            if isinstance(parent, Gtk.Window):
+                dialog = Gtk.AlertDialog.new()
+                dialog.set_modal(True)
+                dialog.set_message(_("Apply Display Configuration?"))
+                dialog.set_detail(_("This will rearrange your displays. Cancel to revert if something goes wrong."))
+                dialog.set_buttons(["Cancel", "Apply"])
+                dialog.set_default_button(1)
+                
+                # Use async so we don't block
+                dialog.choose(parent, None, self._on_confirmation_response, arrangement)
+        except Exception as e:
+            logger.error(f"Error applying arrangement: {e}", exc_info=True)
+    
+    def _on_confirmation_response(self, dialog, result, arrangement):
+        """Handle confirmation dialog response"""
+        try:
+            response = dialog.choose_finish(result)
+            if response == 1:  # Apply button
+                success = self.display_mgr.apply_display_arrangement(arrangement)
+                
+                if success:
+                    logger.info("Display arrangement applied successfully")
+                    # Show success message
+                    dialog = Gtk.AlertDialog.new()
+                    dialog.set_modal(True)
+                    dialog.set_message(_("Display Configuration Applied"))
+                    dialog.set_detail(_("Your displays have been arranged as configured."))
+                    dialog.add_response("ok", _("OK"))
+                    dialog.set_default_response("ok")
+                    dialog.present(self.get_root())
+                else:
+                    logger.error("Failed to apply display arrangement")
+                    # Show error message
+                    dialog = Gtk.AlertDialog.new()
+                    dialog.set_modal(True)
+                    dialog.set_message(_("Failed to Apply Configuration"))
+                    dialog.set_detail(_("There was an error applying the display configuration."))
+                    dialog.add_response("ok", _("OK"))
+                    dialog.present(self.get_root())
+        except Exception as e:
+            logger.error(f"Error in confirmation response: {e}", exc_info=True)
+
+
 # Build display tweaks
 display_tweaks = []
 
@@ -887,6 +1003,11 @@ multi_display_tweaks = [
 ]
 if multi_display_tweaks[0].loaded:
     display_tweaks.append(TweakPreferencesGroup(_("Multiple Displays"), "multi-display", *multi_display_tweaks))
+
+# Screen arrangement group
+arrangement_tweak = ScreenArrangementTweak()
+if arrangement_tweak.loaded:
+    display_tweaks.append(arrangement_tweak)
 
 # Combined primary display and resolution group
 primary_group_tweaks = [

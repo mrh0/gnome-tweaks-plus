@@ -29,8 +29,7 @@
         "--filesystem=/run/host/usr/share/glib-2.0:ro",
         "--filesystem=/run/host/usr/lib/x86_64-linux-gnu/glib-2.0:ro",
         "--filesystem=/run/host/usr/share/gnome-shell:ro",
-        "--filesystem=/usr/share/fonts:ro",
-        "--filesystem=/usr/share/backgrounds:ro",
+        "--filesystem=/run/host/usr/share/fonts:ro",
         "--socket=pulseaudio",
         "--socket=system-bus",
         "--socket=wayland",
@@ -44,7 +43,13 @@
         "--talk-name=net.hadess.PowerProfiles",
         "--talk-name=org.freedesktop.Flatpak",
         "--talk-name=org.freedesktop.Notifications",
-        "--talk-name=org.gnome.Mutter.DisplayConfig"
+        "--talk-name=org.gnome.Mutter.DisplayConfig",
+        "--env=DISPLAY=:0",
+        "--filesystem=/run/host/user:rw",
+        "--talk-name=org.freedesktop.DBus.Properties",
+        "--filesystem=host:rw",
+        "--system-talk-name=org.freedesktop.DBus",
+        "--system-talk-name=org.gnome.Mutter.DisplayConfig"
     ],
     "cleanup" : [
         "/include",
@@ -119,5 +124,6 @@
     ],
     "build-options" : {
         "env" : {        }
-    }
+    },
+    "sandbox" : "none"
 }
