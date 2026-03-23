@@ -50,6 +50,12 @@ audio_sources = [
   'audio/audio_manager.py'
 ]
 
+display_sources = [
+  'display/__init__.py',
+  'display/display_manager.py'
+]
+
 python3.install_sources(shell_sources, subdir: 'gtweak')
 python3.install_sources(tweak_sources, subdir: join_paths('gtweak', 'tweaks'))
 python3.install_sources(audio_sources, subdir: join_paths('gtweak', 'audio'))
+python3.install_sources(display_sources, subdir: join_paths('gtweak', 'display'))

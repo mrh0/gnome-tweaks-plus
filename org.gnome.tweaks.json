@@ -41,7 +41,8 @@
         "--talk-name=org.freedesktop.UPower",
         "--talk-name=net.hadess.PowerProfiles",
         "--talk-name=org.freedesktop.Flatpak",
-        "--talk-name=org.freedesktop.Notifications"
+        "--talk-name=org.freedesktop.Notifications",
+        "--talk-name=org.gnome.Mutter.DisplayConfig"
     ],
     "cleanup" : [
         "/include",

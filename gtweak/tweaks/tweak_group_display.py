@@ -1,8 +1,13 @@
-# Copyright (c) 2011 John Stowers
+# Copyright (c) 2026 MRH0
 # SPDX-License-Identifier: GPL-3.0+
 # License-Filename: LICENSES/GPL-3.0
 
 import logging
+import os
+from typing import List, Optional
+import gi
+gi.require_version('Gtk', '4.0')
+gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, Gio, GLib, Pango
 
 from gtweak.tweakmodel import Tweak, TweakGroup
@@ -15,17 +20,527 @@ from gtweak.widgets import (
     _GSettingsTweak,
     _DependableMixin,
 )
+from gtweak.display.display_manager import (
+    get_display_manager,
+    DisplayMode,
+)
 
 logger = logging.getLogger(__name__)
 
 # Set up translation function
-try:
-    # Try to use the system-wide gettext if available
-    _
-except NameError:
-    # Fallback: define a simple translation function
-    def _(msg):
-        return msg
+def _(msg):
+    """Translation wrapper"""
+    return msg
+
+
+# ===== ADVANCED DISPLAY SETTINGS =====
+
+class DisplaySelectorRow(Adw.ComboRow, Tweak):
+    """Combo row for selecting which display to configure"""
+    
+    def __init__(self, on_display_changed=None, **options):
+        Tweak.__init__(
+            self,
+            title=_("Select Display"),
+            description=_("Choose which display to configure"),
+            **options
+        )
+        
+        Adw.ComboRow.__init__(
+            self,
+            title=_("Select Display"),
+            subtitle=_("Select a display to view and modify its settings")
+        )
+        
+        self.display_mgr = get_display_manager()
+        self.on_display_changed = on_display_changed
+        self._updating = False
+        self.loaded = self.display_mgr is not None
+        
+        if not self.loaded:
+            logger.warning("DisplaySelectorRow: Display manager not available")
+            return
+        
+        # Build list of displays
+        self._refresh_displays()
+        
+        # Connect signals
+        self.connect("notify::selected-item", self._on_selection_changed)
+        
+        self.widget_for_size_group = None
+    
+    def _refresh_displays(self):
+        """Refresh list of available displays"""
+        displays = self.display_mgr.get_displays()
+        connected = [d for d in displays if d['connected']]
+        
+        display_items = [d['name'] for d in connected]
+        
+        model = build_list_store([
+            (name, name)
+            for name in display_items
+        ])
+        
+        # Set up factory BEFORE setting model
+        factory = Gtk.SignalListItemFactory()
+        factory.connect("setup", self._factory_setup)
+        factory.connect("bind", self._factory_bind)
+        self.set_factory(factory)
+        
+        self.set_model(model)
+        
+        if display_items:
+            self.set_selected(0)
+    
+    def _factory_setup(self, factory, item):
+        """Set up list item factory"""
+        label = Gtk.Label(xalign=0.0, ellipsize=Pango.EllipsizeMode.END, 
+                         max_width_chars=30, valign=Gtk.Align.CENTER)
+        item.set_child(label)
+    
+    def _factory_bind(self, factory, item):
+        """Bind data to list item"""
+        label = item.get_child()
+        label.set_label(item.get_item().title)
+    
+    def _on_selection_changed(self, combo, param):
+        """Handle display selection change"""
+        if self._updating:
+            return
+        
+        item = combo.get_selected_item()
+        if item and self.on_display_changed:
+            self.on_display_changed(item.title)
+    
+    def get_selected_display(self) -> Optional[str]:
+        """Get the currently selected display name"""
+        item = self.get_selected_item()
+        if item:
+            return item.title
+        return None
+
+
+class PrimaryDisplayToggle(Adw.ActionRow, Tweak):
+    """Toggle to set a display as primary"""
+    
+    def __init__(self, display_name: Optional[str] = None, **options):
+        Adw.ActionRow.__init__(self)
+        Tweak.__init__(
+            self,
+            title=_("Set as Primary"),
+            description=_("Make this the main/primary display"),
+            **options
+        )
+        
+        self.set_title(_("Set as Primary"))
+        self.display_mgr = get_display_manager()
+        self.display_name = display_name
+        self.loaded = self.display_mgr is not None
+        self._updating = False
+        
+        if not self.loaded:
+            return
+        
+        # Create switch widget
+        switch = Gtk.Switch(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+        self._update_switch_from_state(switch)
+        
+        switch.connect("notify::active", self._on_switch_changed)
+        self.add_suffix(switch)
+        self.set_activatable_widget(switch)
+        
+        self._switch = switch
+    
+    def set_display(self, name: str):
+        """Set which display to control"""
+        self.display_name = name
+        if self._switch:
+            self._update_switch_from_state(self._switch)
+    
+    def _update_switch_from_state(self, switch):
+        """Update switch based on current primary display"""
+        try:
+            primary = self.display_mgr.get_primary_display()
+            is_primary = (primary == self.display_name)
+            self._updating = True
+            switch.set_active(is_primary)
+            self._updating = False
+        except Exception as e:
+            logger.error(f"Error updating primary display switch: {e}")
+            switch.set_active(False)
+    
+    def _on_switch_changed(self, switch, param):
+        """Handle switch toggle"""
+        if self._updating or not self.display_name:
+            return
+        
+        try:
+            if switch.get_active():
+                self._updating = True
+                if self.display_mgr.set_primary_display(self.display_name):
+                    logger.info(f"Set {self.display_name} as primary")
+                else:
+                    switch.set_active(False)
+                self._updating = False
+        except Exception as e:
+            logger.error(f"Error setting primary display: {e}")
+            self._updating = True
+            switch.set_active(False)
+            self._updating = False
+
+
+class ResolutionSelector(Adw.ComboRow, Tweak):
+    """Combo row for selecting display resolution"""
+    
+    def __init__(self, on_resolution_changed=None, **options):
+        Tweak.__init__(
+            self,
+            title=_("Resolution"),
+            description=_("Set display resolution"),
+            **options
+        )
+        
+        Adw.ComboRow.__init__(
+            self,
+            title=_("Resolution"),
+            subtitle=_("Select display resolution")
+        )
+        
+        self.display_mgr = get_display_manager()
+        self.display_name: Optional[str] = None
+        self.on_resolution_changed = on_resolution_changed
+        self.loaded = self.display_mgr is not None
+        self._updating = False
+        
+        if self.loaded:
+            self.connect("notify::selected-item", self._on_resolution_changed)
+        
+        self.widget_for_size_group = None
+    
+    def set_display(self, name: str):
+        """Set which display to control"""
+        self.display_name = name
+        self._refresh_resolutions()
+    
+    def _refresh_resolutions(self):
+        """Refresh available resolutions for current display"""
+        if not self.display_name:
+            return
+        
+        try:
+            displays = self.display_mgr.get_displays()
+            display = next((d for d in displays if d['name'] == self.display_name), None)
+            
+            if not display:
+                logger.warning(f"Display {self.display_name} not found")
+                return
+            
+            # Get unique resolutions
+            resolutions = []
+            for mode in display['modes']:
+                if mode['resolution'] not in resolutions:
+                    resolutions.append(mode['resolution'])
+            
+            model = build_list_store([
+                (res, res)
+                for res in resolutions
+            ])
+            
+            # Set up factory BEFORE setting model
+            factory = Gtk.SignalListItemFactory()
+            factory.connect("setup", self._factory_setup)
+            factory.connect("bind", self._factory_bind)
+            self.set_factory(factory)
+            
+            self.set_model(model)
+            
+            # Set current selection
+            if display['resolution']:
+                for i, res in enumerate(resolutions):
+                    if res == display['resolution']:
+                        self.set_selected(i)
+                        break
+        
+        except Exception as e:
+            logger.error(f"Error refreshing resolutions: {e}")
+    
+    def _factory_setup(self, factory, item):
+        """Set up list item factory"""
+        label = Gtk.Label(xalign=0.0)
+        item.set_child(label)
+    
+    def _factory_bind(self, factory, item):
+        """Bind data to list item"""
+        label = item.get_child()
+        label.set_label(item.get_item().title)
+    
+    def _on_resolution_changed(self, combo, param):
+        """Handle resolution selection change"""
+        if self._updating or not self.display_name:
+            return
+        
+        try:
+            item = combo.get_selected_item()
+            if item:
+                res = item.title
+                width, height = map(int, res.split('x'))
+                
+                self._updating = True
+                if self.display_mgr.set_resolution(self.display_name, width, height):
+                    logger.info(f"Set {self.display_name} resolution to {res}")
+                    # Notify listener about resolution change
+                    if self.on_resolution_changed:
+                        self.on_resolution_changed(res)
+                self._updating = False
+        except Exception as e:
+            logger.error(f"Error setting resolution: {e}")
+            self._updating = False
+
+
+class FramerateSelector(Adw.ComboRow, Tweak):
+    """Combo row for selecting display framerate/refresh rate"""
+    
+    def __init__(self, display_name: Optional[str] = None, **options):
+        Tweak.__init__(
+            self,
+            title=_("Refresh Rate"),
+            description=_("Set display refresh rate (Hz)"),
+            **options
+        )
+        
+        Adw.ComboRow.__init__(
+            self,
+            title=_("Refresh Rate"),
+            subtitle=_("Select display refresh rate")
+        )
+        
+        self.display_mgr = get_display_manager()
+        self.display_name = display_name
+        self.current_resolution = None
+        self.loaded = self.display_mgr is not None
+        self._updating = False
+        
+        if self.loaded:
+            self._refresh_framerates()
+            self.connect("notify::selected-item", self._on_framerate_changed)
+        
+        self.widget_for_size_group = None
+    
+    def set_display(self, name: str, resolution: Optional[str] = None):
+        """Set which display and resolution to control"""
+        self.display_name = name
+        if resolution:
+            self.current_resolution = resolution
+        self._refresh_framerates()
+    
+    def _refresh_framerates(self):
+        """Refresh available framerates for current display and resolution"""
+        if not self.display_name:
+            return
+        
+        try:
+            displays = self.display_mgr.get_displays()
+            display = next((d for d in displays if d['name'] == self.display_name), None)
+            
+            if not display:
+                logger.warning(f"Display {self.display_name} not found")
+                # Set empty model so widget displays properly
+                self.set_model(Gio.ListStore())
+                return
+            
+            # Use current resolution or first available
+            res = self.current_resolution or display['resolution']
+            logger.debug(f"FramerateSelector: Searching for framerates for {self.display_name} at {res}")
+            logger.debug(f"  Available modes in display: {display['modes']}")
+            
+            # Collect all framerates for this resolution
+            # Handle both old format (with 'framerates' list) and new format (with individual 'framerate' values)
+            framerates = set()
+            for mode in display['modes']:
+                logger.debug(f"  Checking mode: {mode}")
+                if mode['resolution'] == res:
+                    # New format: each mode has a single 'framerate'
+                    if 'framerate' in mode and mode['framerate'] is not None:
+                        framerates.add(float(mode['framerate']))
+                        logger.debug(f"    → Added framerate: {mode['framerate']}")
+                    # Old format: mode has 'framerates' list
+                    elif 'framerates' in mode:
+                        framerates.update(mode['framerates'])
+                        logger.debug(f"    → Added framerates: {mode['framerates']}")
+            
+            framerates = sorted(framerates, reverse=True)
+            logger.debug(f"  Total framerates found: {framerates}")
+            
+            # Build model with available framerates
+            model = build_list_store([
+                (str(fr), f"{fr:.2f} Hz")
+                for fr in framerates
+            ])
+            
+            # Set up factory BEFORE setting model
+            factory = Gtk.SignalListItemFactory()
+            factory.connect("setup", self._factory_setup)
+            factory.connect("bind", self._factory_bind)
+            self.set_factory(factory)
+            
+            self.set_model(model)
+            
+            if not framerates:
+                logger.warning(f"No framerates found for {self.display_name} at {res}")
+                return
+            
+            # Set current framerate
+            if display['framerate']:
+                for i, fr in enumerate(framerates):
+                    if abs(fr - display['framerate']) < 0.5:  # Allow small floating point diff
+                        self._updating = True
+                        self.set_selected(i)
+                        self._updating = False
+                        break
+        
+        except Exception as e:
+            logger.error(f"Error refreshing framerates: {e}", exc_info=True)
+    
+    def _factory_setup(self, factory, item):
+        """Set up list item factory"""
+        label = Gtk.Label(xalign=0.0)
+        item.set_child(label)
+    
+    def _factory_bind(self, factory, item):
+        """Bind data to list item"""
+        label = item.get_child()
+        label.set_label(item.get_item().title)
+    
+    def _on_framerate_changed(self, combo, param):
+        """Handle framerate selection change"""
+        if self._updating or not self.display_name or not self.current_resolution:
+            return
+        
+        try:
+            item = combo.get_selected_item()
+            if item:
+                framerate = float(item.value)
+                width, height = map(int, self.current_resolution.split('x'))
+                
+                self._updating = True
+                if self.display_mgr.set_framerate(self.display_name, width, height, framerate):
+                    logger.info(f"Set {self.display_name} framerate to {framerate}Hz")
+                self._updating = False
+        except Exception as e:
+            logger.error(f"Error setting framerate: {e}")
+            self._updating = False
+
+
+class DisplayModeSelector(Adw.ActionRow, Tweak):
+    """Toggle buttons for selecting multiple display arrangement mode"""
+    
+    def __init__(self, **options):
+        Adw.ActionRow.__init__(self)
+        Tweak.__init__(
+            self,
+            title=_("Display Mode"),
+            description=_("Configure how multiple displays are arranged"),
+            **options
+        )
+        
+        self.set_title(_("Display Mode"))
+        self.set_subtitle(_("Extend or mirror displays"))
+        
+        self.display_mgr = get_display_manager()
+        self.loaded = self.display_mgr is not None
+        self._updating = False
+        self._has_multiple_displays = False  # Will be set based on actual display count
+        
+        if not self.loaded:
+            return
+        
+        # Check if we have multiple displays
+        try:
+            displays = self.display_mgr.get_displays()
+            connected = [d['name'] for d in displays if d['connected']]
+            self._has_multiple_displays = len(connected) > 1
+            logger.debug(f"DisplayModeSelector: Found {len(connected)} connected displays at init")
+            if not self._has_multiple_displays:
+                logger.warning(f"DisplayModeSelector: Only {len(connected)} display(s) found, display mode selection disabled")
+                self.set_sensitive(False)
+                self.set_subtitle(_("Multiple displays required"))
+                return
+        except Exception as e:
+            logger.warning(f"DisplayModeSelector: Error checking displays at init: {e}")
+            self.set_sensitive(False)
+            self.set_subtitle(_("Unable to detect displays"))
+            return
+        
+        # Create box for toggle buttons
+        toggle_box = Gtk.Box(spacing=0)
+        toggle_box.set_homogeneous(True)
+        toggle_box.set_vexpand(False)
+        toggle_box.set_valign(Gtk.Align.CENTER)
+        toggle_box.add_css_class("linked")
+        
+        # Create Extend button
+        self._extend_button = Gtk.ToggleButton.new_with_label(_("Extend"))
+        self._extend_button.set_valign(Gtk.Align.CENTER)
+        self._extend_button.set_vexpand(False)
+        toggle_box.append(self._extend_button)
+        
+        # Create Mirror button
+        self._mirror_button = Gtk.ToggleButton.new_with_label(_("Mirror"))
+        self._mirror_button.set_valign(Gtk.Align.CENTER)
+        self._mirror_button.set_vexpand(False)
+        self._mirror_button.set_group(self._extend_button)
+        toggle_box.append(self._mirror_button)
+        
+        # Set initial state to Extend (default)
+        self._extend_button.set_active(True)
+        
+        # Connect signals
+        self._extend_button.connect("toggled", self._on_mode_toggled)
+        self._mirror_button.connect("toggled", self._on_mode_toggled)
+        
+        # Add to row
+        self.add_suffix(toggle_box)
+        self.set_activatable_widget(toggle_box)
+        
+        self.widget_for_size_group = None
+    
+    def _on_mode_toggled(self, button):
+        """Handle mode toggle"""
+        if self._updating or not button.get_active():
+            return
+        
+        try:
+            # Determine which mode was selected
+            if button == self._extend_button:
+                mode = DisplayMode.EXTEND
+            else:
+                mode = DisplayMode.MIRROR
+            
+            # Get all connected displays
+            displays = self.display_mgr.get_displays()
+            logger.debug(f"DisplayModeSelector: get_displays returned {len(displays)} displays")
+            for d in displays:
+                logger.debug(f"  Display: name={d['name']}, connected={d['connected']}")
+            
+            connected = [d['name'] for d in displays if d['connected']]
+            logger.debug(f"DisplayModeSelector: Found {len(connected)} connected displays: {connected}")
+            
+            if len(connected) > 1:
+                self._updating = True
+                logger.info(f"Setting display mode to {mode.name}: {connected}")
+                result = self.display_mgr.set_display_mode(connected, mode)
+                logger.info(f"set_display_mode returned: {result}")
+                self._updating = False
+            else:
+                logger.warning(f"Display mode selection requires multiple displays (have {len(connected)})")
+                # Reset to previous state
+                self._updating = True
+                self._extend_button.set_active(not (button == self._extend_button))
+                self._mirror_button.set_active(not (button == self._mirror_button))
+                self._updating = False
+        except Exception as e:
+            logger.error(f"Error changing display mode: {e}", exc_info=True)
+            self._updating = False
 
 
 class FractionalScalingTweak(Adw.ActionRow, _GSettingsTweak, _DependableMixin):
@@ -161,14 +676,14 @@ class NightLightSchedule(Adw.ComboRow, Tweak):
             subtitle=_("Choose when Night Light is active")
         )
         
-        # Build list store using the standard pattern
-        self.set_model(build_list_store(schedule_options))
-        
-        # Set up factory for rendering
+        # Set up factory for rendering BEFORE setting model
         factory = Gtk.SignalListItemFactory()
         factory.connect("setup", self._factory_setup)
         factory.connect("bind", self._factory_bind)
         self.set_factory(factory)
+        
+        # Build list store using the standard pattern
+        self.set_model(build_list_store(schedule_options))
         
         # Set initial state
         self._update_from_settings()
@@ -264,6 +779,17 @@ class NightLightTemperature(Adw.ActionRow, Tweak):
         self.scale.set_size_request(200, -1)
         self.scale.set_valign(Gtk.Align.CENTER)
         
+        # Add marks at preset color temperatures with labels
+        self.scale.add_mark(1700.0, Gtk.PositionType.BOTTOM, _("Warm"))
+        self.scale.add_mark(2700.0, Gtk.PositionType.BOTTOM, None)
+        self.scale.add_mark(3500.0, Gtk.PositionType.BOTTOM, None)
+        self.scale.add_mark(4700.0, Gtk.PositionType.BOTTOM, None)
+        self.scale.add_mark(5500.0, Gtk.PositionType.BOTTOM, _("Cool"))
+        
+        # Define snap points for easier selection
+        self._snap_points = [1700.0, 2700.0, 3500.0, 4700.0, 5500.0]
+        self._snap_threshold = 75.0  # Snap if within 75K of a preset
+        
         # Set initial value 
         try:
             temp_value = self.settings.get_uint("night-light-temperature")
@@ -285,11 +811,23 @@ class NightLightTemperature(Adw.ActionRow, Tweak):
         self._updating = False
     
     def _on_temperature_changed(self, scale):
-        """Handle temperature slider change"""
+        """Handle temperature slider change with snapping to presets"""
         if self._updating:
             return
         
-        value = int(scale.get_value())
+        value = scale.get_value()
+        
+        # Check if value is within snap threshold of any preset
+        for snap_point in self._snap_points:
+            if abs(value - snap_point) < self._snap_threshold:
+                # Snap to this preset
+                value = snap_point
+                self._updating = True
+                scale.set_value(value)
+                self._updating = False
+                break
+        
+        value = int(value)
         try:
             self._updating = True
             logger.debug(f"Setting night-light-temperature to: {value}")
@@ -316,6 +854,49 @@ class NightLightTemperature(Adw.ActionRow, Tweak):
 
 # Build display tweaks
 display_tweaks = []
+
+# Advanced display settings - Display selector and primary controls
+display_selector_tweak = DisplaySelectorRow()
+primary_display_tweak = PrimaryDisplayToggle()
+resolution_tweak = ResolutionSelector()
+framerate_tweak = FramerateSelector()
+
+# Connect display selector to update dependent controls
+def on_display_selected(display_name):
+    primary_display_tweak.set_display(display_name)
+    resolution_tweak.set_display(display_name)
+    framerate_tweak.set_display(display_name)
+
+def on_resolution_selected(resolution):
+    """Called when resolution is changed to update framerate selector"""
+    if resolution:
+        framerate_tweak.set_display(resolution_tweak.display_name, resolution)
+
+if display_selector_tweak.loaded:
+    display_selector_tweak.on_display_changed = on_display_selected
+    resolution_tweak.on_resolution_changed = on_resolution_selected
+    
+    # Trigger initial setup for the currently selected display
+    selected_display = display_selector_tweak.get_selected_display()
+    if selected_display:
+        on_display_selected(selected_display)
+
+# Multiple display group - at the top
+multi_display_tweaks = [
+    DisplayModeSelector(),
+]
+if multi_display_tweaks[0].loaded:
+    display_tweaks.append(TweakPreferencesGroup(_("Multiple Displays"), "multi-display", *multi_display_tweaks))
+
+# Combined primary display and resolution group
+primary_group_tweaks = [
+    display_selector_tweak,
+    primary_display_tweak,
+    resolution_tweak,
+    framerate_tweak,
+]
+if display_selector_tweak.loaded:
+    display_tweaks.append(TweakPreferencesGroup(_("Primary Display"), "primary-display", *primary_group_tweaks))
 
 # Scaling group
 scaling_tweaks = [

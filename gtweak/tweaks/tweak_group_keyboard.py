@@ -1,4 +1,5 @@
 # Copyright (c) 2011 John Stowers
+# Copyright (c) 2026 MRH0
 # SPDX-License-Identifier: GPL-3.0+
 # License-Filename: LICENSES/GPL-3.0
 
