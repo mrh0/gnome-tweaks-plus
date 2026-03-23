@@ -19,6 +19,17 @@ except NameError:
         return msg
 
 
+def _escape_markup(text):
+    """Escape special characters for use in GTK markup"""
+    if not text:
+        return text
+    text = str(text)  # Convert to string in case it's a number
+    return (text
+            .replace('&', '&amp;')
+            .replace('<', '&lt;')
+            .replace('>', '&gt;'))
+
+
 class ExtensionsEnabledTweak(GSettingsTweakSwitchRow):
     """Toggle to enable/disable all extensions"""
     def __init__(self, **options):
@@ -65,7 +76,7 @@ class ExtensionRow(Adw.ExpanderRow, Tweak):
         self._updating = False
 
         try:
-            self.set_title(title)
+            self.set_title(_escape_markup(title))
             
             # Show version in subtitle
             self.set_subtitle(self.uuid)
@@ -102,7 +113,7 @@ class ExtensionRow(Adw.ExpanderRow, Tweak):
                 LOG.debug(f"Adding description for {title}: {description}")
                 desc_row = Adw.ActionRow()
                 desc_row.set_title(_("Description"))
-                desc_row.set_subtitle(description)
+                desc_row.set_subtitle(_escape_markup(description))
 
                 self.add_row(desc_row)
             else:
@@ -115,12 +126,14 @@ class ExtensionRow(Adw.ExpanderRow, Tweak):
                 placeholder_row.set_child(placeholder_label)
                 self.add_row(placeholder_row)
 
-            # Add version / UUID info
+            # Add version
             version_row = Adw.ActionRow()
             version_row.set_title(_("Version"))
-            subtitleVersion = f"v{version}" if version else _("No version")
+            subtitleVersion = f"v{_escape_markup(version)}" if version else _("No version")
             version_row.set_subtitle(subtitleVersion)
+            LOG.debug(f"Adding version row for {title}: {subtitleVersion}")
             self.add_row(version_row)
+            LOG.debug(f"Version row added successfully")
 
             self.widget_for_size_group = None
         except Exception as e:

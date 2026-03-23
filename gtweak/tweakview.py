@@ -21,6 +21,7 @@ from gtweak.tweaks.tweak_group_windows import TWEAK_GROUP as WindowTweaks
 from gtweak.tweaks.tweak_group_multitasking import TWEAK_GROUP as MultitaskingTweaks
 from gtweak.tweaks.tweak_group_startup import TWEAK_GROUP as StartupApplicationTweaks
 from gtweak.tweaks.tweak_group_extensions import TWEAK_GROUP as ExtensionsTweaks
+from gtweak.tweaks.tweak_group_power import TWEAK_GROUP as PowerTweaks
 
 tweaks = [ 
     MouseTweaks,
@@ -30,6 +31,7 @@ tweaks = [
     WindowTweaks,
     MultitaskingTweaks,
     StartupApplicationTweaks,
+    PowerTweaks,
     ExtensionsTweaks,
     SoundTweaks
 ]
