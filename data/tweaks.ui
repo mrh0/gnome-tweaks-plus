@@ -94,6 +94,35 @@
                               </object>
                             </child>
                             <child>
+                              <object class="GTweakListBoxRow">
+                                <property name="tweakname">display</property>
+                                <child>
+                                  <object class="GtkBox">
+                                    <property name="margin-start">12</property>
+                                    <property name="margin-end">12</property>
+                                    <property name="margin-start">12</property>
+                                    <property name="margin-end">12</property>
+                                    <property name="margin-top">12</property>
+                                    <property name="margin-bottom">12</property>
+                                    <property name="spacing">12</property>
+                                    <child>
+                                      <object class="GtkImage">
+                                        <property name="icon-name">preferences-desktop-display-symbolic</property>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="GtkLabel">
+                                        <property name="halign">start</property>
+                                        <property name="label" translatable="yes">Display</property>
+                                        <property name="hexpand">1</property>
+                                        <property name="vexpand">1</property>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
                               <object class="GTweakListBoxRow" id="list_box_row_sound">
                                 <property name="tweakname">sound</property>
                                 <child>

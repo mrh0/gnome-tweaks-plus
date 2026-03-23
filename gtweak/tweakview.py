@@ -22,12 +22,14 @@ from gtweak.tweaks.tweak_group_multitasking import TWEAK_GROUP as MultitaskingTw
 from gtweak.tweaks.tweak_group_startup import TWEAK_GROUP as StartupApplicationTweaks
 from gtweak.tweaks.tweak_group_extensions import TWEAK_GROUP as ExtensionsTweaks
 from gtweak.tweaks.tweak_group_power import TWEAK_GROUP as PowerTweaks
+from gtweak.tweaks.tweak_group_display import TWEAK_GROUP as DisplayTweaks
 
 tweaks = [ 
     MouseTweaks,
     KeyboardTweaks,
     FontTweaks,
     AppearanceTweaks,
+    DisplayTweaks,
     WindowTweaks,
     MultitaskingTweaks,
     StartupApplicationTweaks,
