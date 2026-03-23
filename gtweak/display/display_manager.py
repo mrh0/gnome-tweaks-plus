@@ -229,27 +229,55 @@ class DBusDisplayManager:
                         continue
                     
                     # NEW structure from recent Ubuntu/GNOME versions:
-                    # [0] = x position
-                    # [1] = y position  
-                    # [2] = transform/rotation (not scale!)
+                    # [0] = PRIMARY CRTC INDEX (points to the specific CRTC for this monitor!)
+                    # [1] = unknown large integer
+                    # [2] = transform/rotation
                     # [3] = crtc_indices (list)
-                    # [4] = connector_name (STRING, not index!)
+                    # [4] = connector_name (STRING)
                     # [5] = supported_mode_indices (list)
                     # [6] = unknown (empty list in current format)
                     # [7] = properties dict
                     
+                    # CRITICAL FIX: logical_monitor[0] IS the CRTC index for THIS monitor!
+                    # CRTC structure: [id, ?, x, y, width, height, ...]
+                    
                     if len(logical_monitor) < 8:
                         logger.debug(f"Logical monitor {logical_idx} has fewer than 8 elements ({len(logical_monitor)}), trying to parse anyway")
                     
-                    x_pos = int(logical_monitor[0])
-                    y_pos = int(logical_monitor[1])
                     transform = int(logical_monitor[2]) if len(logical_monitor) > 2 else 0
                     # Scale should come from somewhere else - for now default to 1.0
                     scale = 1.0
                     crtc_indices = logical_monitor[3] if isinstance(logical_monitor[3], (list, tuple)) else []
                     connector_name = str(logical_monitor[4]) if len(logical_monitor) > 4 else "Unknown"
+                    
+                    # Get X,Y position from the PRIMARY CRTC indicated by logical_monitor[0]
+                    x_pos = 0
+                    y_pos = 0
+                    primary_crtc_idx = int(logical_monitor[0])
+                    if primary_crtc_idx >= 0 and primary_crtc_idx < len(crtcs):
+                        crtc = crtcs[primary_crtc_idx]
+                        if isinstance(crtc, (tuple, list)) and len(crtc) >= 4:
+                            try:
+                                x_pos = int(crtc[2])  # CRTC[2] = X position
+                                y_pos = int(crtc[3])  # CRTC[3] = Y position
+                                logger.debug(f"  Retrieved position from primary CRTC {primary_crtc_idx}: ({x_pos}, {y_pos})")
+                            except (ValueError, TypeError) as e:
+                                logger.debug(f"  Error reading CRTC position: {e}")
+                                x_pos = 0
+                                y_pos = 0
                     supported_modes = logical_monitor[5] if isinstance(logical_monitor[5], (list, tuple)) else []
                     properties = logical_monitor[7] if isinstance(logical_monitor[7], dict) and len(logical_monitor) > 7 else logical_monitor[6] if isinstance(logical_monitor[6], dict) else {}
+                    
+                    # LOG ALL FIELDS FOR DEBUGGING
+                    logger.debug(f"Logical monitor {logical_idx} RAW DATA (first 8 elements):")
+                    for idx in range(min(8, len(logical_monitor))):
+                        item = logical_monitor[idx]
+                        if isinstance(item, (list, tuple)):
+                            logger.debug(f"  [{idx}]: list/tuple with {len(item)} items, first: {item[0] if item else 'empty'}")
+                        elif isinstance(item, dict):
+                            logger.debug(f"  [{idx}]: dict with keys: {list(item.keys())[:5]}")
+                        else:
+                            logger.debug(f"  [{idx}]: {type(item).__name__} = {item}")
                     
                     logger.debug(f"Logical monitor {logical_idx}: x={x_pos}, y={y_pos}, "
                                f"connector={connector_name}, supported_modes={len(supported_modes)}, props_keys={list(properties.keys())[:5]}")
@@ -264,6 +292,18 @@ class DBusDisplayManager:
                     physical_width = 0
                     physical_height = 0
                     mode_idx = None
+                    
+                    # Get physical dimensions from primary CRTC
+                    # CRTC structure: [id, ?, x, y, width, height, ...]
+                    if primary_crtc_idx >= 0 and primary_crtc_idx < len(crtcs):
+                        crtc = crtcs[primary_crtc_idx]
+                        if isinstance(crtc, (tuple, list)) and len(crtc) >= 6:
+                            try:
+                                physical_width = int(crtc[4])   # CRTC[4] = width
+                                physical_height = int(crtc[5])  # CRTC[5] = height
+                                logger.debug(f"  Retrieved physical dimensions from primary CRTC {primary_crtc_idx}: {physical_width}x{physical_height}")
+                            except (ValueError, TypeError) as e:
+                                logger.debug(f"  Error reading CRTC dimensions: {e}")
                     
                     # Find the best mode (largest resolution)
                     best_mode_idx = None
@@ -281,8 +321,10 @@ class DBusDisplayManager:
                         mode_data = self._modes_cache[mode_idx]
                         current_resolution = f"{mode_data['width']}x{mode_data['height']}"
                         current_framerate = mode_data['refresh_rate']
-                        physical_width = mode_data['width']
-                        physical_height = mode_data['height']
+                        # If we already got dimensions from CRTC, prefer those; otherwise use mode data
+                        if physical_width == 0 or physical_height == 0:
+                            physical_width = mode_data['width']
+                            physical_height = mode_data['height']
                         logger.debug(f"  Using best mode {mode_idx}: {current_resolution} @ {current_framerate}Hz")
                     
                     # Expand mode indices into full mode dicts for compatibility with existing code
@@ -387,8 +429,22 @@ class DBusDisplayManager:
             self.get_displays()
             
             # Build logical monitors array for DBus
+            # Expected format per Mutter DisplayConfig:
+            # a(iiduba(ssa{sv})) - array of monitors, each with:
+            #   i = x position (int32)
+            #   i = y position (int32)
+            #   d = scale (double)
+            #   u = transform (uint32)
+            #   b = primary (boolean)
+            #   a(ssa{sv}) = array of outputs (connectors):
+            #     s = connector_name
+            #     s = mode_name in format "WIDTHxHEIGHT@REFRESH_RATE" (e.g., "2560x1440@60")
+            #     a{sv} = properties
             logical_monitors = []
-            for config in arrangement:
+            logger.debug(f"=== DISPLAY ARRANGEMENT DEBUG ===")
+            logger.debug(f"Input arrangement count: {len(arrangement)}")
+            
+            for idx, config in enumerate(arrangement):
                 connector = config.get('connector')
                 x = int(config.get('x', 0))
                 y = int(config.get('y', 0))
@@ -397,7 +453,10 @@ class DBusDisplayManager:
                 primary = bool(config.get('primary', False))
                 mode_idx = int(config.get('mode_idx', 0))
                 
-                # Find connector index
+                logger.debug(f"  [{idx}] {connector}: pos=({x}, {y}), scale={scale}, "
+                           f"transform={transform}, primary={primary}, mode_idx={mode_idx}")
+                
+                # Find connector and get mode name in correct format
                 displays = self._displays_info_cache or self.get_displays()
                 display = next((d for d in displays if d['connector'] == connector), None)
                 
@@ -405,49 +464,63 @@ class DBusDisplayManager:
                     logger.warning(f"Connector '{connector}' not found in display info")
                     continue
                 
-                connector_idx = display.get('connector_idx', 0)
+                # Build mode name in format "WIDTHxHEIGHT@REFRESH_RATE"
+                # Get mode data from cache
+                mode_name = "1024x768@60"  # Default fallback
+                if mode_idx in self._modes_cache:
+                    mode_data = self._modes_cache[mode_idx]
+                    width = mode_data['width']
+                    height = mode_data['height']
+                    refresh = mode_data['refresh_rate']
+                    # Format refresh rate with 3 decimal places (e.g., "179.877" not "179.877197265625")
+                    mode_name = f"{width}x{height}@{refresh:.3f}"
                 
-                # Build logical monitor: [x, y, scale, transform, primary, [[connector_idx, mode_idx, ...]]]
-                logical_monitor = [
+                # Build monitor in correct format:
+                # [x, y, scale, transform, primary, [[connector_name, mode_name, {}]]]
+                logical_monitor = (
                     x,
                     y,
                     scale,
                     transform,
                     primary,
-                    [[connector_idx, mode_idx]]  # Nested list for monitors
-                ]
+                    [[connector, mode_name, {}]]  # Array of outputs with mode name format
+                )
                 logical_monitors.append(logical_monitor)
                 
-                logger.debug(f"Display arrangement: {connector} at ({x}, {y}), "
-                           f"scale={scale}, primary={primary}, mode_idx={mode_idx}")
+                logger.debug(f"  → DBus format: x={x}, y={y}, scale={scale}, "
+                           f"transform={transform}, primary={primary}, mode={mode_name}")
             
             if not logical_monitors:
                 logger.error("No valid logical monitors to apply")
                 return False
             
             # Call ApplyMonitorsConfig with method=1 (persistent)
-            # Parameters: (serial, method, logical_monitors, options)
+            # Signature: (serial, method, array_of_monitors, options_dict)
+            # array_of_monitors signature: a(iiduba(ssa{sv}))
             method = 1  # 1 = persistent, 0 = verify, 2 = temporary
             options_dict = {}  # Additional options (usually empty)
             
-            logger.info(f"Applying display configuration with serial={self._serial}, "
-                       f"method={method}, {len(logical_monitors)} monitors")
+            logger.info(f"=== APPLYING MONITOR CONFIGURATION ===")
+            logger.info(f"Serial: {self._serial}")
+            logger.info(f"Method: {method} (1=persistent)")
+            logger.info(f"Number of monitors: {len(logical_monitors)}")
+            for i, mon in enumerate(logical_monitors):
+                logger.info(f"  Monitor {i}: x={mon[0]}, y={mon[1]}, scale={mon[2]}, "
+                          f"transform={mon[3]}, primary={mon[4]}, connectors={mon[5]}")
             
             result = self.mutter_proxy.call_sync(
                 "ApplyMonitorsConfig",
-                GLib.Variant("(uua(iiiuua(iu))a{sv})",
+                GLib.Variant("(uua(iiduba(ssa{sv}))a{sv})",
                             (self._serial, method, logical_monitors, options_dict)),
                 Gio.DBusCallFlags.NONE,
                 -1,
                 None
             )
             
-            if result:
-                logger.info("Display configuration applied successfully")
-                return True
-            else:
-                logger.error("ApplyMonitorsConfig returned no result")
-                return False
+            # ApplyMonitorsConfig typically returns empty/None on success
+            # The absence of an exception means the call succeeded
+            logger.info("Display configuration applied successfully")
+            return True
         
         except GLib.GError as ge:
             logger.error(f"DBusDisplayManager.apply_display_arrangement: DBus error: {type(ge).__name__}: {ge}")

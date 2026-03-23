@@ -4,7 +4,7 @@
 
 import logging
 import os
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
@@ -926,7 +926,7 @@ class ScreenArrangementTweak(Adw.PreferencesGroup, Tweak):
             # Create a dialog to confirm
             parent = widget.get_root()
             if isinstance(parent, Gtk.Window):
-                dialog = Gtk.AlertDialog.new()
+                dialog = Gtk.AlertDialog()
                 dialog.set_modal(True)
                 dialog.set_message(_("Apply Display Configuration?"))
                 dialog.set_detail(_("This will rearrange your displays. Cancel to revert if something goes wrong."))
@@ -943,29 +943,90 @@ class ScreenArrangementTweak(Adw.PreferencesGroup, Tweak):
         try:
             response = dialog.choose_finish(result)
             if response == 1:  # Apply button
-                success = self.display_mgr.apply_display_arrangement(arrangement)
+                # Normalize arrangement to ensure non-negative coordinates
+                normalized_arrangement = self._normalize_arrangement(arrangement)
+                
+                success = self.display_mgr.apply_display_arrangement(normalized_arrangement)
                 
                 if success:
                     logger.info("Display arrangement applied successfully")
-                    # Show success message
-                    dialog = Gtk.AlertDialog.new()
-                    dialog.set_modal(True)
-                    dialog.set_message(_("Display Configuration Applied"))
-                    dialog.set_detail(_("Your displays have been arranged as configured."))
-                    dialog.add_response("ok", _("OK"))
-                    dialog.set_default_response("ok")
-                    dialog.present(self.get_root())
+                    # Update the original arrangement in the widget so change detection works for next apply
+                    self.arrangement_widget.update_original_arrangement()
+                    # Show success message using a simple dialog
+                    success_dialog = Gtk.AlertDialog()
+                    success_dialog.set_modal(True)
+                    success_dialog.set_message(_("Display Configuration Applied"))
+                    success_dialog.set_detail(_("Your displays have been arranged as configured."))
+                    success_dialog.set_buttons([_("OK")])
+                    success_dialog.set_default_button(0)
+                    success_dialog.choose(self.get_root(), None, self._on_dialog_response, None)
                 else:
                     logger.error("Failed to apply display arrangement")
-                    # Show error message
-                    dialog = Gtk.AlertDialog.new()
-                    dialog.set_modal(True)
-                    dialog.set_message(_("Failed to Apply Configuration"))
-                    dialog.set_detail(_("There was an error applying the display configuration."))
-                    dialog.add_response("ok", _("OK"))
-                    dialog.present(self.get_root())
+                    # Show error message using a simple dialog
+                    error_dialog = Gtk.AlertDialog()
+                    error_dialog.set_modal(True)
+                    error_dialog.set_message(_("Failed to Apply Configuration"))
+                    error_dialog.set_detail(_("There was an error applying the display configuration."))
+                    error_dialog.set_buttons([_("OK")])
+                    error_dialog.set_default_button(0)
+                    error_dialog.choose(self.get_root(), None, self._on_dialog_response, None)
         except Exception as e:
             logger.error(f"Error in confirmation response: {e}", exc_info=True)
+    
+    def _normalize_arrangement(self, arrangement: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Normalize arrangement to ensure correct positioning for Wayland/Mutter.
+        Ensures:
+        1. All monitor coordinates are non-negative (min x >= 0, min y >= 0)
+        2. Primary flag is preserved
+        
+        Args:
+            arrangement: List of display configurations
+            
+        Returns:
+            Normalized arrangement with all coords >= 0
+        """
+        if not arrangement:
+            return arrangement
+        
+        logger.debug(f"=== NORMALIZATION DEBUG ===")
+        logger.debug(f"Input arrangement ({len(arrangement)} items):")
+        for arr in arrangement:
+            primary_mark = "★" if arr.get('primary') else " "
+            logger.debug(f"  {primary_mark} {arr.get('name', '?')}: ({arr['x']}, {arr['y']})")
+        
+        # Find minimum X and Y across all monitors
+        min_x = min((arr['x'] for arr in arrangement), default=0)
+        min_y = min((arr['y'] for arr in arrangement), default=0)
+        
+        # Calculate offset needed to shift all coordinates to non-negative
+        offset_x = abs(min_x) if min_x < 0 else 0
+        offset_y = abs(min_y) if min_y < 0 else 0
+        
+        if offset_x != 0 or offset_y != 0:
+            logger.debug(f"Min coords: ({min_x}, {min_y}), offsetting all by (+{offset_x}, +{offset_y})")
+        
+        # Apply offset to all monitors
+        normalized = []
+        for arr in arrangement:
+            normalized_arr = arr.copy()
+            normalized_arr['x'] = arr['x'] + offset_x
+            normalized_arr['y'] = arr['y'] + offset_y
+            normalized.append(normalized_arr)
+        
+        logger.debug(f"Normalized result:")
+        for arr in normalized:
+            primary_mark = "★" if arr.get('primary') else " "
+            logger.debug(f"  {primary_mark} {arr.get('name', '?')}: ({arr['x']}, {arr['y']})")
+        
+        return normalized
+    
+    def _on_dialog_response(self, dialog, result, user_data):
+        """Handle simple dialog response"""
+        try:
+            dialog.choose_finish(result)
+        except Exception as e:
+            logger.debug(f"Dialog closed: {e}")
 
 
 # Build display tweaks
