@@ -23,6 +23,7 @@ from gtweak.tweaks.tweak_group_startup import TWEAK_GROUP as StartupApplicationT
 from gtweak.tweaks.tweak_group_extensions import TWEAK_GROUP as ExtensionsTweaks
 from gtweak.tweaks.tweak_group_power import TWEAK_GROUP as PowerTweaks
 from gtweak.tweaks.tweak_group_display import TWEAK_GROUP as DisplayTweaks
+from gtweak.tweaks.tweak_group_system_info import TWEAK_GROUP as SystemInfoTweaks
 
 tweaks = [ 
     MouseTweaks,
@@ -34,6 +35,7 @@ tweaks = [
     MultitaskingTweaks,
     StartupApplicationTweaks,
     PowerTweaks,
+    SystemInfoTweaks,
     ExtensionsTweaks,
     SoundTweaks
 ]
