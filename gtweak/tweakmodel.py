@@ -14,6 +14,8 @@ def N_(x): return x
 LOG = logging.getLogger(__name__)
 
 def string_for_search(s):
+    if s is None:
+        return ""
     return GLib.utf8_casefold(GLib.utf8_normalize(s, -1, GLib.NormalizeMode.ALL), -1)
 
 

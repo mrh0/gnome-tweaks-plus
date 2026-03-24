@@ -113,8 +113,8 @@ class GnomeTweaks(Adw.Application):
 
     def reset_cb(self, action, parameter):
         def _on_dialog_response(_dialog, response_type):
-            if response_type == Gtk.ResponseType.OK:
-                SchemaList.reset()
+            #if response_type == Gtk.ResponseType.OK:
+            #    SchemaList.reset()
 
             _dialog.destroy()
 
@@ -143,15 +143,16 @@ class GnomeTweaks(Adw.Application):
         about_comment += f'\n{_("GTK")} {Gtk.get_major_version()}.{Gtk.get_minor_version()}.{Gtk.get_micro_version()}'
 
         AUTHORS = [
-                "John Stowers <john.stowers@gmail.com>"
+                "John Stowers <john.stowers@gmail.com>",
+                "MRH0 <mrh0.github.com>"
                 ]
 
         aboutdialog = Adw.AboutWindow(
             application_name=GLib.get_application_name(),
             application_icon=gtweak.APP_ID,
             comments=about_comment,
-            copyright="Copyright © 2011 - 2013 John Stowers.",
-            developer_name="John Stowers",
+            copyright="Copyright © 2011 - 2013 John Stowers. Copyright © 2026 MRH0.",
+            developer_name="John Stowers, mrh0",
             # TRANSLATORS: Add your name/nickname here (one name per line),
             # they will be displayed in the "about" dialog
             translator_credits=_("translator-credits"),
@@ -159,7 +160,7 @@ class GnomeTweaks(Adw.Application):
             transient_for=self.win,
             version=VERSION,
             website="https://wiki.gnome.org/Apps/Tweaks",
-            issue_url="https://gitlab.gnome.org/GNOME/gnome-tweaks/-/issues",
+            issue_url="https://github.com/mrh0/gnome-tweaks-plus/issues",
             license_type=Gtk.License.GPL_3_0
         )
 

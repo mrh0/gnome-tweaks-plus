@@ -74,13 +74,32 @@
 
 /* Remove padding from SpinRow and Bin widgets */
 spinrow {
-  padding: 0 !important;
-  margin: 0 !important;
+  padding: 0;
+  margin: 0;
 }
 
 bin {
-  padding: 0 !important;
-  margin: 0 !important;
+  padding: 0;
+  margin: 0;
+}
+
+/* Grid tweak buttons styling */
+.grid-tweak-button {
+  min-width: 80px;
+  min-height: 100px;
+  padding: 12px;
+  border-radius: 8px;
+  background-color: @view_bg_color;
+  border: 1px solid @borders;
+}
+
+.grid-tweak-button:hover {
+  background-color: @theme_hover_color;
+}
+
+.grid-tweak-button:active {
+  background-color: @theme_selected_bg_color;
+  color: @theme_selected_fg_color;
 }
 
 

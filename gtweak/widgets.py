@@ -189,7 +189,10 @@ class _GSettingsTweak(Tweak):
     @property
     def extra_info(self):
         if self._extra_info is None:
-            self._extra_info = self.settings.schema_get_summary(self.key_name)
+            try:
+                self._extra_info = self.settings.schema_get_summary(self.key_name)
+            except (AttributeError, TypeError):
+                self._extra_info = None
         return self._extra_info
 
 
@@ -572,8 +575,11 @@ class GSettingsTweakComboRow(Adw.ComboRow, _GSettingsTweak, _DependableMixin):
     @property
     def extra_info(self):
         if self._extra_info is None:
-            self._extra_info = self.settings.schema_get_summary(self.key_name)
-            if self._key_options is not None:
+            try:
+                self._extra_info = self.settings.schema_get_summary(self.key_name)
+            except (AttributeError, TypeError):
+                self._extra_info = None
+            if self._key_options is not None and self._extra_info:
                 self._extra_info += " " + " ".join(op[0] for op in self._key_options)
         return self._extra_info
 

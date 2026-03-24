@@ -437,19 +437,6 @@ class BackgroundPreviewWidget(Gtk.Box, Tweak):
         
         # Get actual monitor aspect ratio
         try:
-            display = Gdk.Display.get_default()
-            monitors = display.get_monitors()
-            if len(monitors) > 0:
-                monitor = monitors.get_item(0)
-                geometry = monitor.get_geometry()
-                aspect_ratio = geometry.width / geometry.height
-            else:
-                aspect_ratio = 16 / 9  # fallback
-        except Exception as e:
-            logging.debug(f"Could not get monitor aspect ratio: {e}")
-            aspect_ratio = 16 / 9  # fallback
-        
-        try:
             self._settings = Gio.Settings.new("org.gnome.desktop.background")
             self._settings.connect("changed::picture-uri", self._on_background_changed)
             self._settings.connect("changed::picture-uri-dark", self._on_background_changed)
@@ -484,7 +471,6 @@ class BackgroundPreviewWidget(Gtk.Box, Tweak):
             .light-theme-frame {{
                 background-color: #f5f5f5;
                 color: #000000;
-                aspect-ratio: {aspect_ratio};
             }}
             .light-theme-label {{
                 background-color: #f5f5f5;
@@ -495,7 +481,6 @@ class BackgroundPreviewWidget(Gtk.Box, Tweak):
             .dark-theme-frame {{
                 background-color: #1a1a1a;
                 color: #ffffff;
-                aspect-ratio: {aspect_ratio};
             }}
             .dark-theme-label {{
                 background-color: #1a1a1a;

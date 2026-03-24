@@ -58,6 +58,8 @@ class Window(Adw.ApplicationWindow):
     searchbar = Gtk.Template.Child()
     entry = Gtk.Template.Child()
     list_box_row_sound = Gtk.Template.Child()
+    sidebar_stack = Gtk.Template.Child()
+    gridbox = Gtk.Template.Child()
 
     def __init__(self, app: Adw.Application, model: TweakModel):
         super().__init__(application=app, show_menubar=False)
@@ -80,6 +82,9 @@ class Window(Adw.ApplicationWindow):
 
         self._setup_shortcut()
         self.searchbar.set_key_capture_widget(self)
+        
+        # Setup responsive layout: show grid when sidebar is active, list otherwise
+        self._setup_responsive_layout()
 
 
     def _setup_header(self):
@@ -185,6 +190,68 @@ class Window(Adw.ApplicationWindow):
         end_pane_size_group.add_widget(self.right_box)
         end_pane_size_group.add_widget(self._right_header)
 
+    def _setup_responsive_layout(self):
+        """Setup responsiveness: switch between list and grid view based on leaflet folded state"""
+        # Create a handler for leaflet folded state changes
+        def on_leaflet_folded_changed(leaflet, param):
+            if leaflet.get_folded():
+                # Show grid view when sidebar is the only visible pane
+                self.sidebar_stack.set_visible_child_name("grid")
+            else:
+                # Show list view when both panes can be visible
+                self.sidebar_stack.set_visible_child_name("list")
+        
+        # Connect to the folded property changes
+        self.main_leaflet.connect("notify::folded", on_leaflet_folded_changed)
+        
+        # Set initial state
+        on_leaflet_folded_changed(self.main_leaflet, None)
+        
+        # Connect grid buttons to listbox row selection
+        self._setup_grid_to_list_binding()
+    
+    def _setup_grid_to_list_binding(self):
+        """Bind grid buttons to select corresponding listbox rows"""
+        # Map of tweakname to index for grid buttons
+        tweaknames = [
+            'fonts', 'appearance', 'display', 'sound', 'mouse', 'keyboard',
+            'window-management', 'multitasking', 'startup-applications',
+            'power', 'screen_lock', 'extensions', 'system_info'
+        ]
+        
+        # Get all grid buttons from gridbox
+        # GtkFlowBox wraps children in GtkFlowBoxChild, so we need to unwrap them
+        grid_children = []
+        child = self.gridbox.get_first_child()
+        while child:
+            # Each child is a GtkFlowBoxChild
+            grid_children.append(child)
+            child = child.get_next_sibling()
+        
+        # Get all listbox rows
+        listbox_rows = []
+        child = self.listbox.get_first_child()
+        while child:
+            listbox_rows.append(child)
+            child = child.get_next_sibling()
+        
+        # Create a mapping of tweakname to listbox row
+        tweakname_to_row = {}
+        for row in listbox_rows:
+            if hasattr(row, 'tweakname'):
+                tweakname_to_row[row.tweakname] = row
+        
+        # Connect grid buttons to listbox selection and add tweakname property
+        for i, (tweakname, flowbox_child) in enumerate(zip(tweaknames, grid_children)):
+            if tweakname in tweakname_to_row:
+                row = tweakname_to_row[tweakname]
+                # Add tweakname as a custom attribute to the GtkFlowBoxChild
+                flowbox_child.tweakname = tweakname
+                # Get the button (child of GtkFlowBoxChild)
+                button = flowbox_child.get_child()
+                if button:
+                    button.connect('clicked', lambda b, r=row: self.listbox.select_row(r))
+
     def _setup_shortcut(self):
         s_trigger = Gtk.ShortcutTrigger.parse_string("<primary>f")
         s_action = Gtk.CallbackAction.new(lambda w, a, s: s.set_search_mode(True), self.searchbar)
@@ -208,6 +275,15 @@ class Window(Adw.ApplicationWindow):
         name = row.props.tweakname
         if name in user_data:
             return row
+    
+    @staticmethod
+    def _grid_filter_func(child, user_data: List[str]):
+        # GtkFlowBox contains GtkFlowBoxChild which contains the button
+        # We need to get the tweakname from the button's parent data
+        if hasattr(child, 'tweakname'):
+            name = child.tweakname
+            return name in user_data
+        return False
 
     def _after_key_press(self, widget, event):
         if not self.search_btn.get_active() or not self.entry.is_focus():
@@ -224,6 +300,10 @@ class Window(Adw.ApplicationWindow):
 
     def _on_list_changed(self, group):
         self.listbox.set_filter_func(self._list_filter_func, group)
+        self.gridbox.set_filter_func(self._grid_filter_func, group)
+        self.listbox.invalidate_filter()
+        self.gridbox.invalidate_filter()
+        
         selected = self.listbox.get_selected_row()
         if not selected:
             return
