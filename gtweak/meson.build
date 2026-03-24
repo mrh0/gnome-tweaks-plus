@@ -41,6 +41,7 @@ tweak_sources = [
   'tweaks/tweak_group_windows.py',
   'tweaks/tweak_group_multitasking.py',
   'tweaks/tweak_group_power.py',
+  'tweaks/tweak_group_screen_lock.py',
   'tweaks/tweak_group_extensions.py',
   'tweaks/tweak_group_display.py',
   'tweaks/tweak_group_system_info.py'

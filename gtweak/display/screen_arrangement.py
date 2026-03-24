@@ -172,9 +172,18 @@ class ScreenArrangementCanvas(Gtk.DrawingArea):
     def _on_draw(self, widget, cr, width, height, user_data=None):
         """Draw the screen arrangement canvas (GTK4 set_draw_func callback)"""
         try:
-            # Draw background
-            cr.set_source_rgb(0.95, 0.95, 0.95)
-            cr.rectangle(0, 0, width, height)
+            # Draw background with rounded corners
+            radius = 8
+            # Convert #2B2B2E to RGB (0-1 range): #2B = 43/255, 2E = 46/255
+            cr.set_source_rgb(43/255, 43/255, 46/255)
+            
+            # Draw rounded rectangle background
+            cr.new_sub_path()
+            cr.arc(radius, radius, radius, 3.14159, 3.14159 * 1.5)
+            cr.arc(width - radius, radius, radius, 3.14159 * 1.5, 0)
+            cr.arc(width - radius, height - radius, radius, 0, 3.14159 * 0.5)
+            cr.arc(radius, height - radius, radius, 3.14159 * 0.5, 3.14159)
+            cr.close_path()
             cr.fill()
             
             # Update rendering info
@@ -654,33 +663,44 @@ class ScreenArrangementWidget(Gtk.Box):
     
     def __init__(self):
         """Initialize the screen arrangement widget"""
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        self.set_margin_top(12)
-        self.set_margin_bottom(12)
-        self.set_margin_start(12)
-        self.set_margin_end(12)
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         
         # Track original state for change detection
         self.original_arrangement = None
         
-        # Canvas in a scrolled window for responsiveness
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_vexpand(True)
-        scroll.set_hexpand(True)
-        scroll.set_min_content_width(600)
-        scroll.set_min_content_height(300)
-        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.NEVER)
+        # Create outer panel container with card styling
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        panel.add_css_class("card")
+        panel.set_hexpand(True)
+        panel.set_vexpand(True)
         
-        self.canvas = ScreenArrangementCanvas()
-        self.canvas.set_size_request(800, 400)  # Minimum drawing area size
-        # Hook up callback for when arrangement changes
-        self.canvas.on_arrangement_changed = self._update_button_states
-        scroll.set_child(self.canvas)
-        self.append(scroll)
+        # Header box with title/subtitle on left and buttons on right
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header_box.set_margin_top(12)
+        header_box.set_margin_bottom(6)
+        header_box.set_margin_start(12)
+        header_box.set_margin_end(12)
         
-        # Button box
+        # Title and subtitle on left
+        title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        title_box.set_hexpand(True)
+        title_box.set_halign(Gtk.Align.START)
+        
+        title_label = Gtk.Label(label="Arrange Displays")
+        title_label.set_halign(Gtk.Align.START)
+        title_box.append(title_label)
+        
+        subtitle_label = Gtk.Label(label="Drag displays with the mouse to adjust arrangement")
+        subtitle_label.add_css_class("dim-label")
+        subtitle_label.set_halign(Gtk.Align.START)
+        title_box.append(subtitle_label)
+        
+        header_box.append(title_box)
+        
+        # Button box on right
         button_box = Gtk.Box(spacing=6)
         button_box.set_halign(Gtk.Align.END)
+        button_box.set_valign(Gtk.Align.CENTER)
         
         # Reset button - disabled by default
         self.reset_btn = Gtk.Button(label="Reset")
@@ -694,8 +714,29 @@ class ScreenArrangementWidget(Gtk.Box):
         self.apply_btn.set_sensitive(False)
         self.apply_btn.connect("clicked", self._on_apply_clicked)
         button_box.append(self.apply_btn)
+        header_box.append(button_box)
         
-        self.append(button_box)
+        panel.append(header_box)
+        
+        # Canvas in a scrolled window for responsiveness
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_hexpand(True)
+        scroll.set_min_content_width(600)
+        scroll.set_min_content_height(300)
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.NEVER)
+        scroll.set_margin_bottom(12)
+        scroll.set_margin_start(12)
+        scroll.set_margin_end(12)
+        
+        self.canvas = ScreenArrangementCanvas()
+        self.canvas.set_size_request(800, 400)  # Minimum drawing area size
+        # Hook up callback for when arrangement changes
+        self.canvas.on_arrangement_changed = self._update_button_states
+        scroll.set_child(self.canvas)
+        panel.append(scroll)
+        
+        self.append(panel)
     
     def set_displays(self, displays: List[Dict[str, Any]]):
         """Set the displays to arrange"""
