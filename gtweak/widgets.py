@@ -555,7 +555,16 @@ class GSettingsTweakComboRow(Adw.ComboRow, _GSettingsTweak, _DependableMixin):
         label.set_label(item.get_item().title)
 
     def _update_combo_for_setting(self):
-        val = self.settings.get_string(self.key_name)
+        try:
+            # Try to get as string first (works for most types)
+            val = self.settings.get_string(self.key_name)
+        except Exception:
+            # If get_string fails, try getting the variant directly
+            try:
+                val = self.settings.get_value(self.key_name).unpack()
+            except Exception:
+                return
+        
         model = self.get_model()
         index = next((i for (i, item) in enumerate(model) if item.value == val), None)
         if index is not None:
@@ -570,7 +579,13 @@ class GSettingsTweakComboRow(Adw.ComboRow, _GSettingsTweak, _DependableMixin):
         item = combo.get_selected_item()
 
         if item:
-          self.settings.set_string(self.key_name, item.value)
+            # Use set_value() with a GLib.Variant for better enum handling
+            try:
+                variant = GLib.Variant.new_string(item.value)
+                self.settings.set_value(self.key_name, variant)
+            except Exception:
+                # Fallback to set_string() if variant conversion fails
+                self.settings.set_string(self.key_name, item.value)
 
     @property
     def extra_info(self):

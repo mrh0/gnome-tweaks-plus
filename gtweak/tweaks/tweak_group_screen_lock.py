@@ -165,4 +165,4 @@ _tweaks = [
   ),
 ]
 
-TWEAK_GROUP = TweakPreferencesPage("screen_lock", _("Screen Lock"), *_tweaks)
+TWEAK_GROUP = TweakPreferencesPage("screen-lock", _("Screen Lock"), *_tweaks)

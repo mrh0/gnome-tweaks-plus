@@ -577,4 +577,4 @@ if pointing_stick_is_present():
     ),
   ]
 
-TWEAK_GROUP = TweakPreferencesPage("mouse", _("Mouse & Touchpad"), *_tweaks)
+TWEAK_GROUP = TweakPreferencesPage("mouse", _("Mouse &amp; Touchpad"), *_tweaks)

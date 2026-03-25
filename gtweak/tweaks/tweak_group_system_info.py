@@ -623,7 +623,7 @@ try:
     ]
     
     TWEAK_GROUP = TweakPreferencesPage(
-        "system_info",
+        "system-info",
         _("System Info"),
         TweakPreferencesGroup(
             _("System"),
@@ -639,4 +639,4 @@ try:
     )
 except Exception as e:
     LOG.error(f"Failed to initialize system info tweaks: {e}")
-    TWEAK_GROUP = TweakPreferencesPage("system_info", _("System Info"))
+    TWEAK_GROUP = TweakPreferencesPage("system-info", _("System Info"))

@@ -25,6 +25,7 @@ from gtweak.tweaks.tweak_group_power import TWEAK_GROUP as PowerTweaks
 from gtweak.tweaks.tweak_group_screen_lock import TWEAK_GROUP as ScreenLockTweaks
 from gtweak.tweaks.tweak_group_display import TWEAK_GROUP as DisplayTweaks
 from gtweak.tweaks.tweak_group_system_info import TWEAK_GROUP as SystemInfoTweaks
+from gtweak.tweaks.tweak_group_region_language import TWEAK_GROUP as RegionLanguageTweaks
 
 tweaks = [ 
     MouseTweaks,
@@ -39,7 +40,8 @@ tweaks = [
     ScreenLockTweaks,
     SystemInfoTweaks,
     ExtensionsTweaks,
-    SoundTweaks
+    SoundTweaks,
+    RegionLanguageTweaks
 ]
 
 
@@ -214,19 +216,10 @@ class Window(Adw.ApplicationWindow):
         """Bind grid buttons to select corresponding listbox rows"""
         # Map of tweakname to index for grid buttons
         tweaknames = [
-            'fonts', 'appearance', 'display', 'sound', 'mouse', 'keyboard',
+            'fonts', 'appearance', 'display', 'region-language', 'sound', 'mouse', 'keyboard',
             'window-management', 'multitasking', 'startup-applications',
-            'power', 'screen_lock', 'extensions', 'system_info'
+            'power', 'screen-lock', 'extensions', 'system-info'
         ]
-        
-        # Get all grid buttons from gridbox
-        # GtkFlowBox wraps children in GtkFlowBoxChild, so we need to unwrap them
-        grid_children = []
-        child = self.gridbox.get_first_child()
-        while child:
-            # Each child is a GtkFlowBoxChild
-            grid_children.append(child)
-            child = child.get_next_sibling()
         
         # Get all listbox rows
         listbox_rows = []
@@ -238,19 +231,27 @@ class Window(Adw.ApplicationWindow):
         # Create a mapping of tweakname to listbox row
         tweakname_to_row = {}
         for row in listbox_rows:
-            if hasattr(row, 'tweakname'):
-                tweakname_to_row[row.tweakname] = row
+            try:
+                tweakname = row.props.tweakname
+                if tweakname:
+                    tweakname_to_row[tweakname] = row
+            except (AttributeError, TypeError):
+                continue
         
-        # Connect grid buttons to listbox selection and add tweakname property
-        for i, (tweakname, flowbox_child) in enumerate(zip(tweaknames, grid_children)):
+        # Connect grid buttons to listbox selection and store tweakname on flowbox children for filtering
+        for i, tweakname in enumerate(tweaknames):
             if tweakname in tweakname_to_row:
                 row = tweakname_to_row[tweakname]
-                # Add tweakname as a custom attribute to the GtkFlowBoxChild
-                flowbox_child.tweakname = tweakname
-                # Get the button (child of GtkFlowBoxChild)
-                button = flowbox_child.get_child()
-                if button:
-                    button.connect('clicked', lambda b, r=row: self.listbox.select_row(r))
+                # Get the flowbox child at this index
+                flowbox_child = self.gridbox.get_child_at_index(i)
+                if flowbox_child:
+                    # Store tweakname on the flowbox child for use in filtering
+                    flowbox_child._tweakname = tweakname
+                    # Get the button (child of GtkFlowBoxChild)
+                    button = flowbox_child.get_child()
+                    if button:
+                        # Use a default argument to capture the row reference correctly
+                        button.connect('clicked', lambda b, r=row: self.listbox.select_row(r))
 
     def _setup_shortcut(self):
         s_trigger = Gtk.ShortcutTrigger.parse_string("<primary>f")
@@ -279,9 +280,9 @@ class Window(Adw.ApplicationWindow):
     @staticmethod
     def _grid_filter_func(child, user_data: List[str]):
         # GtkFlowBox contains GtkFlowBoxChild which contains the button
-        # We need to get the tweakname from the button's parent data
-        if hasattr(child, 'tweakname'):
-            name = child.tweakname
+        # We stored the tweakname on the flowbox child for filtering
+        if hasattr(child, '_tweakname'):
+            name = child._tweakname
             return name in user_data
         return False
 

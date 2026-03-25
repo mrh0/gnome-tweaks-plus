@@ -44,7 +44,8 @@ tweak_sources = [
   'tweaks/tweak_group_screen_lock.py',
   'tweaks/tweak_group_extensions.py',
   'tweaks/tweak_group_display.py',
-  'tweaks/tweak_group_system_info.py'
+  'tweaks/tweak_group_system_info.py',
+  'tweaks/tweak_group_region_language.py'
 ]
 
 audio_sources = [
